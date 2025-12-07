@@ -33,7 +33,16 @@ export function mapClaudeToOpenAI(body: ClaudeRequest, config: ProxyConfig): Ope
 
   const messages: OpenAIChatMessage[] = [];
   if (body.system) {
-    messages.push({ role: "system", content: body.system });
+    const systemContent = Array.isArray(body.system)
+      ? body.system.map((block) => {
+          if (typeof block === "string") return block;
+          if (block && typeof block === "object" && "text" in block) {
+            return (block as { text: string }).text;
+          }
+          return "";
+        }).join("\n")
+      : body.system;
+    messages.push({ role: "system", content: systemContent });
   }
 
   for (const message of body.messages) {

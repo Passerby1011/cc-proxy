@@ -4,7 +4,7 @@ export class TextAggregator {
 
   constructor(
     private readonly intervalMs: number,
-    private readonly onFlush: (text: string) => void,
+    private readonly onFlush: (text: string) => void | Promise<void>,
   ) {}
 
   add(text: string) {
@@ -25,6 +25,17 @@ export class TextAggregator {
     this.buffer = "";
     this.clearTimer();
     this.onFlush(chunk);
+  }
+
+  async flushAsync() {
+    if (!this.buffer) {
+      this.clearTimer();
+      return;
+    }
+    const chunk = this.buffer;
+    this.buffer = "";
+    this.clearTimer();
+    await this.onFlush(chunk);
   }
 
   private clearTimer() {

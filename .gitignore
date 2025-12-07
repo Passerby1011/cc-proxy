@@ -2,5 +2,8 @@ claude-code-router/
 Toolify/
 /server.pid
 /deno-proxy/server.log
-/deno-proxy/start-proxy.sh
+/scripts/start-deno-proxy.sh
+/logs/
 /server.pid
+？？
+logs/

@@ -1,6 +1,6 @@
 import { ProxyConfig } from "./config.ts";
 import { OpenAIChatRequest } from "./types.ts";
-import { log } from "./logging.ts";
+import { logRequest } from "./logging.ts";
 
 export async function callUpstream(
   body: OpenAIChatRequest,
@@ -17,6 +17,11 @@ export async function callUpstream(
     headers.set("authorization", `Bearer ${config.upstreamApiKey}`);
   }
 
+  await logRequest(requestId, "debug", "Sending upstream request", {
+    url: config.upstreamBaseUrl,
+    upstreamRequestBody: body,
+  });
+
   let response: Response;
   try {
     response = await fetch(config.upstreamBaseUrl, {
@@ -29,7 +34,7 @@ export async function callUpstream(
     clearTimeout(timeout);
   }
 
-  log("debug", "Upstream response received", { requestId, status: response.status });
+  await logRequest(requestId, "debug", "Upstream response received", { status: response.status });
   if (!response.body) {
     throw new Error("Upstream response has no body");
   }

@@ -84,10 +84,15 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
 
 export interface PromptInjectionResult {
   messages: OpenAIChatMessage[];
-  triggerSignal: string;
+  triggerSignal?: string;
 }
 
 export function injectPrompt(request: OpenAIChatRequest, tools: ClaudeToolDefinition[]): PromptInjectionResult {
+  if (!tools.length) {
+    // 无工具时直接透传用户/系统消息，不注入任何工具指令
+    return { messages: request.messages };
+  }
+
   const triggerSignal = randomTriggerSignal();
   const toolsXml = buildToolsXml(tools);
   const template = DEFAULT_TEMPLATE

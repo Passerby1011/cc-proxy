@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "project": "b4u2cc-proxy",
+  "entrypoint": "deno-proxy/src/main.ts",
+  "include": [
+    "deno-proxy/**/*",
+    "docs/**/*"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/test_*.ts",
+    "scripts/**/*",
+    ".github/**/*"
+  ],
+  "environmentVariables": {
+    "required": [
+      "UPSTREAM_BASE_URL",
+      "UPSTREAM_API_KEY"
+    ],
+    "optional": [
+      {
+        "name": "UPSTREAM_MODEL",
+        "description": "Force override model name",
+        "default": ""
+      },
+      {
+        "name": "CLIENT_API_KEY",
+        "description": "Client authentication key",
+        "default": ""
+      },
+      {
+        "name": "PORT",
+        "description": "Server port",
+        "default": "3456"
+      },
+      {
+        "name": "TOKEN_MULTIPLIER",
+        "description": "Token counting multiplier",
+        "default": "1.0"
+      },
+      {
+        "name": "LOG_LEVEL",
+        "description": "Logging level",
+        "default": "info"
+      },
+      {
+        "name": "MAX_REQUESTS_PER_MINUTE",
+        "description": "Rate limit per minute",
+        "default": "10"
+      },
+      {
+        "name": "TIMEOUT_MS",
+        "description": "Request timeout in milliseconds",
+        "default": "120000"
+      }
+    ]
+  },
+  "permissions": [
+    "net",
+    "env",
+    "read",
+    "write"
+  ],
+  "build": {
+    "command": "deno cache deno-proxy/src/main.ts",
+    "watch": "deno run --allow-net --allow-env --watch deno-proxy/src/main.ts"
+  }
+}

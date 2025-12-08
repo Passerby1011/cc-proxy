@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.window"]
+  },
+  "lint": {
+    "rules": {
+      "exclude": ["no-explicit-any"]
+    }
+  },
+  "tasks": {
+    "start": "deno run --allow-net --allow-env deno-proxy/src/main.ts",
+    "dev": "deno run --allow-net --allow-env --watch deno-proxy/src/main.ts",
+    "test": "deno test --allow-env deno-proxy/src",
+    "cache": "deno cache deno-proxy/src/main.ts",
+    "check": "deno check deno-proxy/src/main.ts"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "useTabs": false
+  },
+  "imports": {
+    "js-tiktoken": "npm:js-tiktoken@^1.0.7"
+  },
+  "deploy": {
+    "project": "b4u2cc-proxy",
+    "entrypoint": "deno-proxy/src/main.ts",
+    "include": [
+      "deno-proxy/**/*"
+    ],
+    "exclude": [
+      "**/*.test.ts",
+      "**/test_*.ts"
+    ]
+  }
+}

@@ -2,6 +2,7 @@ import { ParsedInvokeCall, ParserEvent } from "./types.ts";
 import { SSEWriter } from "./sse.ts";
 import { TextAggregator } from "./aggregator.ts";
 import { ProxyConfig } from "./config.ts";
+import { countTokensWithTiktoken } from "./tiktoken.ts";
 
 function generateToolId(): string {
   // 生成随机 ID：toolu_ + 12位随机字符
@@ -116,8 +117,8 @@ export class ClaudeStream {
   private async flushText(text: string) {
     if (!text) return;
     await this.ensureTextBlock();
-    // 使用 tiktoken 估算 token，然后应用倍数
-    const estimatedTokens = Math.ceil(text.length * 0.25); // 简单估算
+    // 使用 tiktoken 精确计算 token，然后应用倍数
+    const estimatedTokens = countTokensWithTiktoken(text, "cl100k_base");
     this.context.totalOutputTokens += estimatedTokens;
     await this.writer.send({
       event: "content_block_delta",
@@ -167,8 +168,8 @@ export class ClaudeStream {
   private async emitThinking(content: string) {
     if (!content) return;
     await this.ensureThinkingBlock();
-    // 使用 tiktoken 估算 token，然后应用倍数
-    const estimatedTokens = Math.ceil(content.length * 0.25); // 简单估算
+    // 使用 tiktoken 精确计算 token，然后应用倍数
+    const estimatedTokens = countTokensWithTiktoken(content, "cl100k_base");
     this.context.totalOutputTokens += estimatedTokens;
     await this.writer.send({
       event: "content_block_delta",

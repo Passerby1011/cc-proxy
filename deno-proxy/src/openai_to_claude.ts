@@ -188,6 +188,10 @@ export class ClaudeStream {
   async handleEvents(events: ParserEvent[]) {
     for (const event of events) {
       if (event.type === "text") {
+        // 忽略纯空白文本（空格、换行等），避免在思考前创建空文本块
+        if (event.content.trim() === "") {
+          continue;
+        }
         // 一旦开始输出可见文本，就不应该再继续向 thinking block 写入
         // 确保任何打开的 thinking block 在进入文本阶段之前先关闭
         if (this.context.thinkingBlockOpen) {
@@ -239,7 +243,7 @@ export class ClaudeStream {
   }
 
   private async flushText(text: string) {
-    if (!text) return;
+    if (!text || text.trim() === "") return;
     await this.ensureTextBlock();
     // 使用 tiktoken 精确计算 token，然后应用倍数
     const estimatedTokens = countTokensWithTiktoken(text, "cl100k_base");

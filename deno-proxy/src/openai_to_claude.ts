@@ -14,6 +14,115 @@ function generateToolId(): string {
   return id;
 }
 
+function splitIntoChunks(text: string, maxChunkSize = 50): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    // 优先在句子边界处分割
+    let end = start + maxChunkSize;
+    if (end >= text.length) {
+      end = text.length;
+    } else {
+      // 向后查找句子边界（句号、问号、感叹号、换行符）
+      const sentenceBoundaries = ['.', '?', '!', '\n', '。', '？', '！'];
+      for (let i = end; i > start; i--) {
+        if (sentenceBoundaries.includes(text[i])) {
+          end = i + 1;
+          break;
+        }
+      }
+      // 如果没有找到句子边界，则查找逗号、分号、空格
+      if (end === start + maxChunkSize) {
+        const wordBoundaries = [',', ';', ' '];
+        for (let i = end; i > start; i--) {
+          if (wordBoundaries.includes(text[i])) {
+            end = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
+function splitJsonIntoChunks(json: string, maxChunkSize = 30): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+    }
+    // 在引号外且遇到 JSON 结构字符时考虑分割
+    if (!inString && (ch === '{' || ch === '}' || ch === ',' || ch === ':')) {
+      // 检查是否达到最小块大小
+      if (i - start >= maxChunkSize) {
+        chunks.push(json.slice(start, i + 1));
+        start = i + 1;
+      }
+    }
+  }
+  // 剩余部分
+  if (start < json.length) {
+    chunks.push(json.slice(start));
+  }
+  // 如果没有任何分割，则按固定大小分割（但避免在引号内分割）
+  if (chunks.length === 0) {
+    let s = 0;
+    while (s < json.length) {
+      let e = s + maxChunkSize;
+      if (e >= json.length) {
+        e = json.length;
+      } else {
+        // 如果 e 在引号内，向后调整到引号外
+        let inStr = false;
+        let esc = false;
+        for (let j = s; j < e; j++) {
+          if (esc) {
+            esc = false;
+            continue;
+          }
+          if (json[j] === '\\') {
+            esc = true;
+            continue;
+          }
+          if (json[j] === '"') {
+            inStr = !inStr;
+          }
+        }
+        if (inStr) {
+          // 找到下一个引号结束位置
+          while (e < json.length && (json[e] !== '"' || esc)) {
+            if (json[e] === '\\') {
+              esc = !esc;
+            } else {
+              esc = false;
+            }
+            e++;
+          }
+          if (e < json.length) e++;
+        }
+      }
+      chunks.push(json.slice(s, e));
+      s = e;
+    }
+  }
+  return chunks;
+}
+
 interface StreamContext {
   requestId: string;
   aggregator: TextAggregator;
@@ -29,12 +138,13 @@ interface StreamContext {
 export class ClaudeStream {
   private context: StreamContext;
   private tokenMultiplier: number;
+  private pingSent = false;
 
   constructor(private writer: SSEWriter, config: ProxyConfig, requestId: string, inputTokens: number = 0) {
     this.context = {
       requestId,
       writer,
-      aggregator: new TextAggregator(config.aggregationIntervalMs, async (text) => await this.flushText(text)),
+      aggregator: new TextAggregator(0, async (text) => await this.flushText(text)), // 设置为0立即发送，实现细粒度文本 delta
       nextBlockIndex: 0,
       textBlockOpen: false,
       thinkingBlockOpen: false,
@@ -65,18 +175,14 @@ export class ClaudeStream {
           stop_sequence: null,
           usage: {
             input_tokens: inputTokens,
-            output_tokens: 0,
+            output_tokens: 1, // 优化：设置为非零值，更接近示例
           },
           content: [],
           stop_reason: null,
         },
       },
     }, true);
-    // 发送 ping 事件以保持连接（符合官方协议）
-    await this.writer.send({
-      event: "ping",
-      data: { type: "ping" },
-    }, true);
+    // 不再在此处发送 ping，将在第一个内容块开始后发送
   }
 
   async handleEvents(events: ParserEvent[]) {
@@ -106,6 +212,16 @@ export class ClaudeStream {
     }
   }
 
+  private async maybeSendPing() {
+    if (!this.pingSent) {
+      this.pingSent = true;
+      await this.writer.send({
+        event: "ping",
+        data: { type: "ping" },
+      }, true);
+    }
+  }
+
   private async ensureTextBlock() {
     if (!this.context.textBlockOpen) {
       const index = this.context.nextBlockIndex++;
@@ -118,6 +234,7 @@ export class ClaudeStream {
           content_block: { type: "text", text: "" },
         },
       }, true);
+      await this.maybeSendPing();
     }
   }
 
@@ -156,9 +273,10 @@ export class ClaudeStream {
         data: {
           type: "content_block_start",
           index,
-          content_block: { type: "thinking", thinking: "", signature: "" },
+          content_block: { type: "thinking", thinking: "" },
         },
       }, true);
+      await this.maybeSendPing();
     }
   }
 
@@ -188,10 +306,9 @@ export class ClaudeStream {
     const estimatedTokens = countTokensWithTiktoken(content, "cl100k_base");
     this.context.totalOutputTokens += estimatedTokens;
     
-    // 将思考内容分割成小块以模拟流式
-    const chunkSize = 5; // 每个块大约5个字符
-    for (let i = 0; i < content.length; i += chunkSize) {
-      const chunk = content.slice(i, i + chunkSize);
+    // 将思考内容按句子边界分割成小块以模拟流式
+    const chunks = splitIntoChunks(content, 50);
+    for (const chunk of chunks) {
       await this.writer.send({
         event: "content_block_delta",
         data: {
@@ -224,10 +341,19 @@ export class ClaudeStream {
     const estimatedTokens = countTokensWithTiktoken(inputJson, "cl100k_base");
     this.context.totalOutputTokens += estimatedTokens;
     
-    // 将 JSON 分割成小块以模拟流式
-    const chunkSize = 5; // 每个块大约5个字符
-    for (let i = 0; i < inputJson.length; i += chunkSize) {
-      const chunk = inputJson.slice(i, i + chunkSize);
+    // 发送空 delta 作为开始（示例中有）
+    await this.writer.send({
+      event: "content_block_delta",
+      data: {
+        type: "content_block_delta",
+        index,
+        delta: { type: "input_json_delta", partial_json: "" },
+      },
+    }, true);
+    
+    // 将 JSON 按结构分割成小块以模拟流式
+    const chunks = splitJsonIntoChunks(inputJson, 30);
+    for (const chunk of chunks) {
       await this.writer.send({
         event: "content_block_delta",
         data: {

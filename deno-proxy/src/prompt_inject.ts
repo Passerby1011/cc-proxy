@@ -2,17 +2,30 @@ import { ClaudeToolDefinition, OpenAIChatMessage, OpenAIChatRequest } from "./ty
 import { randomTriggerSignal } from "./signals.ts";
 
 const DEFAULT_TEMPLATE = `
+You are an intelligent assistant equipped with specific tools. Your behavior changes based on the user's request type.
 In this environment you have access to a set of tools you can use to answer the user's question.  
-
 When you need to use a tool, you MUST strictly follow the format below.
 
-**1. Available Tools:**
-Here is the list of tools you can use. You have access ONLY to these tools and no others.
-<antml\b:tools>
+### 1. Available Tools
+<antml:tools>
 {tools_list}
-</antml\b:tools>
+</antml:tools>
 
-**2. Tool Call Procedure:**
+### 2. Response Strategy (Execute vs. Chat)
+You must assess the user request and choose ONE of the following modes immediately:
+**MODE A: TOOL EXECUTION (Prioritize this for functionality)**
+- **Trigger Condition:** If the request requires data fetching, file manipulation, calculation, or any action supported by your tools.
+- **Behavior:** **BE SILENT AND ACT.** Do NOT explain what you are going to do. Do NOT say "I will check that for you."
+- **Output:** Start immediately with the trigger signal "{trigger_signal}", followed by the XML block.
+- **Constraint:** The XML must be the **ONLY** content of your response. Correctness is paramount.
+**MODE B: CONVERSATION (Only when tools are useless)**
+- **Trigger Condition:** If the user is greeting, asking for general advice, or asking a question that tools cannot solve.
+- **Behavior:** Respond naturally and helpfully in plain text.
+- **Constraint:** Do NOT output any trigger signals or XML tags in this mode.
+
+### 3. Strict Tool Implementation Rules
+If you enter **MODE A**, you must adhere to these technical rules:
+	
 When you decide to call a tool, you MUST output EXACTLY this trigger signal: {trigger_signal}
 The trigger signal MUST be output on a completely empty line by itself before any tool calls.
 Do NOT add any other text, spaces, or characters before or after {trigger_signal} on that line.
@@ -20,19 +33,18 @@ You may provide explanations or reasoning before outputting {trigger_signal}, bu
 You MUST output the trigger signal {trigger_signal} ONLY ONCE per response. Never output multiple trigger signals in a single response.
 
 After outputting the trigger signal, immediately provide your tool calls enclosed in <invoke> XML tags.
-
-**3. XML Format for Tool Calls:**
+    
+4.  **XML Structure:**
 Your tool calls must be structured EXACTLY as follows. This is the ONLY format you can use, and any deviation will result in failure.
-
-<antml\b:format>
-{trigger_signal}
-<invoke name="Write">
-<parameter name="file_path">C:\\path\\weather.css</parameter>
-<parameter name="content"> body {{ background-color: lightblue; }} </parameter>
-</invoke>
-</antml\b:format>
-
-IMPORTANT RULES:
+    	
+    <antml:format>
+    {trigger_signal}
+    <invoke name="$TOOL_NAME">
+    <parameter name="$PARAM_NAME">$VALUE_OR_JSON_STRING</parameter>
+    </invoke>
+    </antml:format>
+    
+5.  IMPORTANT RULES:
   - You may provide explanations or reasoning before deciding to call a tool.
   - Once you decide to call a tool, you must first output the trigger signal {trigger_signal} on a separate line by itself.
   - The trigger signal may only appear once per response and must not be repeated.
@@ -41,8 +53,7 @@ IMPORTANT RULES:
   - Parameters must retain punctuation (including hyphen prefixes) exactly as defined.
   - Encode arrays and objects in JSON before placing inside <parameter>.
   - Be concise when not using tools.
-  - 在调用工具后会得到工具调用结果，所以请在一次工具调用得到结果后再调用下一个。
-  
+  - After invoking the tool,  you will receive the result of the tool call. Therefore,  please wait until you obtain the result from one tool call before invoking the next one 
   `;
 
 function escapeText(text: string): string {

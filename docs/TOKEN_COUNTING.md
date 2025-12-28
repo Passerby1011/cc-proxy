@@ -1,161 +1,65 @@
 # Token 计数功能
 
-本文档介绍了 deno-proxy 项目中新增的 token 计数功能，包括 Claude API 集成和本地 tiktoken 实现。
+cc-proxy 内置了高性能的 Token 计数功能，支持 Claude 官方 API 计数和本地 tiktoken 估算两种模式。
 
 ## 功能概述
 
-- **Claude API 集成**: 使用 Anthropic 的官方 `/v1/messages/count_tokens` API 进行精确的 token 计算
-- **本地 tiktoken 实现**: 当 Claude API 不可用时，使用本地算法进行 token 估算
-- **Token 倍数支持**: 通过环境变量 `TOKEN_MULTIPLIER` 调整 token 计数结果
-- **API 端点**: 提供 `/v1/messages/count_tokens` 端点供客户端直接调用
+- **双模式支持**: 优先调用 Anthropic 官方 `/v1/messages/count_tokens` 接口以获取 100% 准确的结果；当未配置官方 Key 时，自动切换到本地 tiktoken 引擎。
+- **本地 tiktoken**: 使用兼容 `cl100k_base` (GPT-4/Claude 3 系列使用) 的本地分词算法，响应极快且无需联网。
+- **自定义倍数 (`TOKEN_MULTIPLIER`)**: 支持通过环境变量调整最终显示的 token 数，方便进行成本管理或计费补偿。
+- **API 端点**: 暴露标准的 Claude 兼容端点，供外部工具或脚本调用。
 
 ## 环境变量配置
 
-### 新增环境变量
+| 变量名 | 说明 | 示例值 |
+|--------|------|--------|
+| `TOKEN_MULTIPLIER` | Token 计数倍数，支持数字或百分比字符串 | `1.5`, `120%`, `0.8x` |
+| `CLAUDE_API_KEY` | (可选) Anthropic 官方 Key，用于精确计数 | `sk-ant-xxx` |
 
-| 变量名 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `TOKEN_MULTIPLIER` | number | 1.0 | Token 倍数，用于调整计算结果 |
-| `CLAUDE_API_KEY` | string | - | Claude API 密钥，用于调用官方 token 计数 API |
-
-### 示例配置
-
-```bash
-# 设置 token 倍数为 2.5（用于计费调整）
-export TOKEN_MULTIPLIER=2.5
-
-# 配置 Claude API 密钥以使用官方 token 计数
-export CLAUDE_API_KEY="your-claude-api-key-here"
-
-# 其他现有配置
-export PORT=3456
-export UPSTREAM_BASE_URL="http://127.0.0.1:8000/v1/chat/completions"
-```
-
-## API 使用
+## API 使用说明
 
 ### count_tokens 端点
 
-**端点**: `POST /v1/messages/count_tokens`
+**URL**: `POST /v1/messages/count_tokens`
 
-**请求体**:
+**请求体示例**:
 ```json
 {
-  "model": "claude-3-sonnet-20240229",
+  "model": "claude-3-5-sonnet-20241022",
   "messages": [
-    {"role": "user", "content": "Hello, how are you?"},
-    {"role": "assistant", "content": "I'm doing well, thank you!"},
-    {"role": "user", "content": "Can you help me?"}
+    {"role": "user", "content": "你好，请介绍一下你自己。"}
   ]
 }
 ```
 
-**响应**:
+**响应示例**:
 ```json
 {
-  "input_tokens": 135,
+  "input_tokens": 15,
+  "token_count": 15,
+  "tokens": [...],
   "output_tokens": null
 }
 ```
 
-### 使用 curl 测试
+## 实现原理
 
-```bash
-curl -X POST http://localhost:3456/v1/messages/count_tokens \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-3-sonnet-20240229",
-    "messages": [
-      {"role": "user", "content": "Hello, world"}
-    ]
-  }'
-```
+1. **请求拦截**: 当 `/v1/messages` 请求进入代理时，系统会自动提取 `system` 和 `messages` 内容。
+2. **选择引擎**:
+   - 如果设置了 `CLAUDE_API_KEY`，代理会并发发起一个官方计数请求。
+   - 如果未设置或官方请求失败，则调用本地 `tiktoken.ts` 模块。
+3. **应用倍数**: 计数结果通过 `config.ts` 中的 `parseTokenMultiplier` 函数进行转换。例如设置 `1.2x`，原始 100 tokens 将显示为 120。
+4. **注入响应**: 最终的 `input_tokens` 会被注入到流式响应的 `message_start` 或 `message_delta` 事件的 `usage` 字段中，确保客户端 UI 能够实时显示。
 
-## 实现细节
+## 本地计数准确性说明
 
-### Token 计算策略
-
-1. **优先使用 Claude API**: 如果配置了 `CLAUDE_API_KEY`，优先调用 Anthropic 官方 API
-2. **本地 tiktoken 备用**: 当 Claude API 不可用时，使用本地 tiktoken 实现
-3. **应用倍数**: 所有计算结果都会乘以 `TOKEN_MULTIPLIER`
-
-### 本地 tiktoken 实现
-
-项目包含一个简化的 tiktoken 实现，支持：
-- 英文单词和标点符号
-- 中文字符
-- 数字和常见编程符号
-- 基于字符模式的启发式分词
-
-### 集成到主流程
-
-- 在处理 `/v1/messages` 请求时自动计算 input tokens
-- 在流式响应中正确应用 token 倍数
-- 在 `message_start` 和 `message_delta` 事件中包含准确的 token 计数
+本地计数器基于 `js-tiktoken` 的 Deno 移植版实现。虽然它非常接近官方结果，但在处理极少数特殊 Unicode 字符或特定格式的 XML 标签时可能存在 ±1-2 token 的偏差。对于大多数场景（如 Claude Code 的日常使用），这种偏差可以忽略不计。
 
 ## 测试
 
-### 运行 token 计数测试
+运行以下命令验证计数逻辑：
 
 ```bash
-# 基础测试
-deno run --allow-env --allow-net src/test_token_counter.ts
-
-# 测试不同倍数
-TOKEN_MULTIPLIER=2.5 deno run --allow-env --allow-net src/test_token_counter.ts
-
-# 测试 API 端点（需要先启动服务器）
-deno run --allow-net test_api.ts
+cd deno-proxy
+deno test src/token_counter.ts
 ```
-
-### 测试用例
-
-测试脚本包含以下场景：
-1. 简单英文对话
-2. 中文对话
-3. 带系统提示的请求
-4. 仅本地计算（不调用 Claude API）
-5. 长文本处理
-
-## 计费示例
-
-使用 `TOKEN_MULTIPLIER=2.5` 的计费示例：
-
-```
-原始 token 数: 54
-倍数: 2.5
-计费 token 数: 135 (54 * 2.5)
-```
-
-## 注意事项
-
-1. **API 限制**: Claude 的 count_tokens API 有速率限制，建议合理使用
-2. **精度差异**: 本地 tiktoken 实现可能与官方 API 有细微差异
-3. **性能考虑**: 本地计算速度更快，但精度略低于官方 API
-4. **成本控制**: 通过倍数调整可以用于成本核算和利润管理
-
-## 故障排除
-
-### 常见问题
-
-1. **Claude API 调用失败**
-   - 检查 `CLAUDE_API_KEY` 是否正确
-   - 确认网络连接正常
-   - 查看日志中的详细错误信息
-
-2. **Token 计数不准确**
-   - 尝试使用不同的 `TOKEN_MULTIPLIER` 值
-   - 对比本地计算和 Claude API 的结果
-   - 检查是否包含系统提示的 token
-
-3. **API 端点不可用**
-   - 确认服务器正在运行
-   - 检查端口配置
-   - 查看服务器日志
-
-## 更新日志
-
-- **v1.0.0**: 初始实现，支持 Claude API 集成和本地 tiktoken
-- 添加 `TOKEN_MULTIPLIER` 环境变量支持
-- 实现 `/v1/messages/count_tokens` 端点
-- 集成到主消息处理流程

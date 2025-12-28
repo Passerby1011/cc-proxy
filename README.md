@@ -1,43 +1,107 @@
 # cc-proxy - Claude Code 代理服务器
 
-cc-proxy 是一个基于 Deno 的代理服务器，通过“提示词注入 + XML 标签模拟”机制，让不支持原生工具调用的模型（OpenAI 或 Anthropic 格式）也能完美支持 Claude Code 的工具调用能力。
+[![Deno](https://img.shields.io/badge/deno-v1.40+-00ADD8?logo=deno)](https://deno.land/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+cc-proxy 是一个基于 Deno 的智能代理服务器，通过"提示词注入 + XML 标签模拟"机制，让不支持原生工具调用的 AI 模型也能完美支持 Claude Code 的工具调用能力。
+
+## 📋 目录
+
+- [项目概述](#项目概述)
+- [核心特性](#核心特性)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [架构设计](#架构设计)
+- [API 端点](#api-端点)
+- [部署指南](#部署指南)
+- [文档索引](#文档索引)
+- [故障排除](#故障排除)
+- [贡献指南](#贡献指南)
+- [许可证](#许可证)
 
 ## 项目概述
 
 本项目核心组件为 `deno-proxy`，它在 Claude Code 客户端与上游 AI 服务之间建立了一套高度解耦的流水线。无论上游使用何种协议，只要它能理解并遵循 Prompt 指令，就能通过本代理获得工具调用支持。
 
+### 🎯 为什么选择 cc-proxy？
+
+- **突破限制**: 让不支持工具调用的便宜渠道也能运行 Claude Code
+- **统一体验**: 无论后端是 GPT-4、Claude 还是其他模型，客户端体验完全一致
+- **极简维护**: 采用流水线架构，新增协议仅需实现少量代码
+- **灵活配置**: 支持多渠道动态切换，一套配置管理无限模型
+
 ### 🚀 核心架构：增强与平移
-新版采用了“先增强，后平移”的先进架构：
-1.  **Enrichment (注入增强)**：统一在 Claude 请求层面将工具定义和历史消息文本化。
-2.  **Routing & Translation (路由与平移)**：根据配置将“增强后”的请求透明映射到 OpenAI 或 Anthropic 原生协议。
-3.  **Unified Streaming (统一流解析)**：无论上游返回何种 SSE 格式，均由统一的 Parser 识别工具边界，并由统一的 Writer 生成标准 Claude 响应。
 
-## 核心功能
+新版采用了"先增强，后平移"的先进架构：
 
-- **多协议支持**: 原生支持上游为 OpenAI 格式或 Anthropic 格式。
-- **工具调用模拟**: 即使模型不支持原生 Function Calling，也能通过注入的 XML 指令精准触发工具。
-- **思考模式 (Thinking)**: 完美支持并转换思考块，支持最新的思维链模型。
-- **动态渠道切换**: 支持 `渠道名+模型名` 格式，一套配置支持无限模型。
-- **API Key 透传**: 支持客户端使用自己的 API 密钥进行上游认证。
-- **Token 计数**: 精确的 tiktoken 本地计数，支持自定义倍数调整。
+1. **Enrichment (注入增强)**: 统一在 Claude 请求层面将工具定义和历史消息文本化
+2. **Routing & Translation (路由与平移)**: 根据配置将"增强后"的请求透明映射到 OpenAI 或 Anthropic 原生协议
+3. **Unified Streaming (统一流解析)**: 无论上游返回何种 SSE 格式，均由统一的 Parser 识别工具边界，并由统一的 Writer 生成标准 Claude 响应
+
+## 核心特性
+
+### 🛠️ 协议与模型支持
+
+- ✅ **多协议支持**: 原生支持上游为 OpenAI 格式或 Anthropic 格式
+- ✅ **工具调用模拟**: 即使模型不支持原生 Function Calling，也能通过注入的 XML 指令精准触发工具
+- ✅ **思考模式 (Thinking)**: 完美支持并转换思考块，兼容最新的思维链模型
+- ✅ **流式响应**: 完整的 SSE 流式处理，实时返回结果
+
+### 🔄 渠道与路由
+
+- ✅ **动态渠道切换**: 支持 `渠道名+模型名` 格式，一套配置支持无限模型
+- ✅ **多渠道配置**: 通过环境变量配置多个上游服务，灵活切换
+- ✅ **智能路由**: 根据模型名自动选择对应的上游渠道
+
+### 🔐 安全与认证
+
+- ✅ **API Key 透传**: 支持客户端使用自己的 API 密钥进行上游认证
+- ✅ **访问控制**: 可配置客户端 API Key 验证
+- ✅ **速率限制**: 内置请求频率控制，防止滥用
+
+### 📊 监控与计费
+
+- ✅ **Token 计数**: 精确的 tiktoken 本地计数，支持 Claude API 集成
+- ✅ **Token 倍数**: 支持自定义倍数调整，便于计费管理
+- ✅ **结构化日志**: 详细的请求日志，支持按请求 ID 追踪
+- ✅ **健康检查**: 提供 `/healthz` 端点用于服务监控
 
 ## 快速开始
 
 ### 环境要求
-- Deno 1.40+ 
 
-### 渠道配置 (推荐方式)
+- **Deno**: 1.40+ ([安装指南](https://deno.land/manual/getting_started/installation))
+- **操作系统**: Linux、macOS 或 Windows
+- **网络**: 稳定的互联网连接
 
-新版本推荐使用“渠道”配置，支持配置多个上游服务。每个渠道通过索引（1, 2, ...）定义：
+### 一键部署到 Deno Deploy
 
-| 变量名 | 必需 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `CHANNEL_{n}_NAME` | 是 | - | 渠道标识符，用于模型名前缀 |
-| `CHANNEL_{n}_BASE_URL` | 是 | - | 上游 API 地址 |
-| `CHANNEL_{n}_API_KEY` | 否 | - | 上游 API 密钥 |
-| `CHANNEL_{n}_PROTOCOL` | 否 | `openai` | 上游协议类型：`openai` 或 `anthropic` |
+最简单的方式是使用 Deno Deploy 一键部署：
 
-**示例配置**:
+```bash
+# 安装 deployctl
+deno install -gArf jsr:@deno/deployctl
+
+# 登录
+deployctl login
+
+# 部署项目
+deployctl deploy --project=cc-proxy deno-proxy/src/main.ts
+```
+
+详细步骤请参考 [Deno Deploy 部署指南](docs/deno-deployment-guide.md)。
+
+### 本地运行
+
+1. **克隆项目**
+
+```bash
+git clone https://github.com/Passerby1011/cc-proxy.git
+cd cc-proxy
+```
+
+2. **配置环境变量**
+
 ```bash
 # 渠道 1: OpenAI 兼容 API
 export CHANNEL_1_NAME=my_openai
@@ -50,51 +114,389 @@ export CHANNEL_2_NAME=my_ant
 export CHANNEL_2_BASE_URL=https://api.anthropic.com/v1/messages
 export CHANNEL_2_API_KEY=sk-ant-xxx
 export CHANNEL_2_PROTOCOL=anthropic
+
+# 其他配置
+export PORT=3456
+export LOG_LEVEL=info
 ```
 
-### 客户端使用方式
-
-配置好渠道后，客户端请求的模型名可以使用 `渠道名+模型名` 格式：
-
-- `my_openai+gpt-4o`: 将请求通过渠道 1 发送，上游模型名为 `gpt-4o`。
-- `my_ant+claude-3-5-sonnet-20241022`: 将请求通过渠道 2 发送，上游模型名为 `claude-3-5-sonnet-20241022`。
-
-> 如果不带 `+` 号，默认使用配置中的第一个渠道。
-
-## 详细环境变量
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `UPSTREAM_PROTOCOL` | `openai` | 全局默认协议，当渠道未指定时使用 |
-| `PASSTHROUGH_API_KEY` | `false` | 是否将客户端 Authorization 头的 Key 透传给上游 |
-| `CLIENT_API_KEY` | - | 代理服务器自身的访问密钥 |
-| `TOKEN_MULTIPLIER` | `1.0` | 计费 Token 倍数，支持 "1.2x", "120%" 等格式 |
-| `PORT` | `3456` | 服务监听端口 |
-| `LOG_LEVEL` | `info` | 日志级别 (debug, info, warn, error) |
-
-## 启动服务
+3. **启动服务**
 
 ```bash
 cd deno-proxy
 deno run --allow-net --allow-env src/main.ts
 ```
 
-## 架构说明
+4. **测试服务**
+
+```bash
+# 健康检查
+curl http://localhost:3456/healthz
+
+# 测试工具调用
+curl -X POST http://localhost:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my_openai+gpt-4o",
+    "messages": [{"role": "user", "content": "What is the weather?"}],
+    "tools": [{"name": "get_weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}],
+    "max_tokens": 1024
+  }'
+```
+
+## 配置说明
+
+### 渠道配置 (推荐方式)
+
+新版本推荐使用"渠道"配置，支持配置多个上游服务。每个渠道通过索引（1, 2, ...）定义：
+
+| 变量名 | 必需 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `CHANNEL_{n}_NAME` | 是 | - | 渠道标识符，用于模型名前缀 |
+| `CHANNEL_{n}_BASE_URL` | 是 | - | 上游 API 地址 |
+| `CHANNEL_{n}_API_KEY` | 否 | - | 上游 API 密钥（可由客户端透传） |
+| `CHANNEL_{n}_PROTOCOL` | 否 | `openai` | 上游协议类型：`openai` 或 `anthropic` |
+
+**配置示例**:
+
+```bash
+# 渠道 1: OpenAI 兼容 API
+export CHANNEL_1_NAME=my_openai
+export CHANNEL_1_BASE_URL=https://api.openai.com/v1/chat/completions
+export CHANNEL_1_API_KEY=sk-xxx
+export CHANNEL_1_PROTOCOL=openai
+
+# 渠道 2: Anthropic 原生 API (无工具调用模式)
+export CHANNEL_2_NAME=my_ant
+export CHANNEL_2_BASE_URL=https://api.anthropic.com/v1/messages
+export CHANNEL_2_API_KEY=sk-ant-xxx
+export CHANNEL_2_PROTOCOL=anthropic
+
+# 渠道 3: 本地模型
+export CHANNEL_3_NAME=local
+export CHANNEL_3_BASE_URL=http://localhost:8000/v1/chat/completions
+export CHANNEL_3_PROTOCOL=openai
+```
+
+### 客户端使用方式
+
+配置好渠道后，客户端请求的模型名可以使用 `渠道名+模型名` 格式：
+
+- `my_openai+gpt-4o`: 将请求通过渠道 1 发送，上游模型名为 `gpt-4o`
+- `my_ant+claude-3-5-sonnet-20241022`: 将请求通过渠道 2 发送，上游模型名为 `claude-3-5-sonnet-20241022`
+- `local+llama-3-70b`: 将请求通过渠道 3 发送，上游模型名为 `llama-3-70b`
+
+> 💡 **提示**: 如果不带 `+` 号，默认使用配置中的第一个渠道。
+
+### 全局配置
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `UPSTREAM_PROTOCOL` | `openai` | 全局默认协议，当渠道未指定时使用 |
+| `PASSTHROUGH_API_KEY` | `false` | 是否将客户端 Authorization 头的 Key 透传给上游 |
+| `CLIENT_API_KEY` | - | 代理服务器自身的访问密钥，用于验证客户端请求 |
+| `TOKEN_MULTIPLIER` | `1.0` | 计费 Token 倍数，支持 "1.2x", "120%" 等格式 |
+| `PORT` | `3456` | 服务监听端口 |
+| `HOST` | `0.0.0.0` | 服务监听地址 |
+| `LOG_LEVEL` | `info` | 日志级别 (debug, info, warn, error) |
+| `MAX_REQUESTS_PER_MINUTE` | `60` | 每分钟最大请求数 |
+| `TIMEOUT_MS` | `120000` | 上游请求超时时间（毫秒） |
+| `CLAUDE_API_KEY` | - | Claude API 密钥，用于精确 Token 计数 |
+
+## 架构设计
 
 ### 核心组件
-1.  **`prompt_inject.ts`**: 工具模拟的核心。它负责拦截 Claude 请求，将工具定义转化为 XML 提示词，并将历史工具消息“退化”为纯文本。
-2.  **`parser.ts`**: 智能解析器。实时监控上游输出流，识别触发信号并拦截提取 XML 工具调用指令。
-3.  **`claude_writer.ts`**: 标准输出器。将 Parser 生成的事件（文本、思考、工具调用）封装成标准的 Claude SSE 格式。
-4.  **`map_claude_to_openai.ts`**: 协议适配器。负责将增强后的请求映射为 OpenAI 格式的消息数组。
 
-### 为什么选择本代理？
-- **绕过限制**: 让那些不支持工具调用的便宜渠道也能运行 Claude Code。
-- **统一体验**: 无论后端是 GPT-4、Claude 还是本地 Llama，客户端体验完全一致。
-- **极简维护**: 采用流水线架构，新增协议仅需实现少量代码。
+```
+┌─────────────────┐
+│  Claude Code    │
+│   客户端        │
+└────────┬────────┘
+         │ Anthropic API Request
+         │ (messages + tools)
+         ▼
+┌─────────────────────────────────────────┐
+│         cc-proxy (deno-proxy)           │
+│                                         │
+│  ┌───────────────────────────────────┐ │
+│  │  1. Prompt Injection              │ │
+│  │     - 工具定义 → XML 提示词       │ │
+│  │     - 历史消息文本化              │ │
+│  └───────────────┬───────────────────┘ │
+│                  │                      │
+│  ┌───────────────▼───────────────────┐ │
+│  │  2. Protocol Adapter              │ │
+│  │     - 映射到 OpenAI/Anthropic     │ │
+│  │     - 渠道路由                    │ │
+│  └───────────────┬───────────────────┘ │
+│                  │                      │
+│  ┌───────────────▼───────────────────┐ │
+│  │  3. Upstream Forwarder            │ │
+│  │     - 流式请求转发                │ │
+│  │     - 超时与重试                  │ │
+│  └───────────────┬───────────────────┘ │
+└──────────────────┼─────────────────────┘
+                   │ OpenAI/Anthropic Request
+                   │ (纯文本，无工具字段)
+                   ▼
+         ┌─────────────────┐
+         │   上游 AI 服务   │
+         │  (GPT-4/Claude)  │
+         └────────┬────────┘
+                  │ SSE Stream
+                  │ (含 XML 工具调用)
+                  ▼
+┌─────────────────────────────────────────┐
+│         cc-proxy (deno-proxy)           │
+│                                         │
+│  ┌───────────────────────────────────┐ │
+│  │  4. Stream Parser                 │ │
+│  │     - 检测触发信号                │ │
+│  │     - 解析 XML 工具调用           │ │
+│  └───────────────┬───────────────────┘ │
+│                  │                      │
+│  ┌───────────────▼───────────────────┐ │
+│  │  5. Claude Writer                 │ │
+│  │     - 生成标准 Claude SSE         │ │
+│  │     - Tool use/result 封装        │ │
+│  └───────────────┬───────────────────┘ │
+└──────────────────┼─────────────────────┘
+                   │ Claude API Response
+                   │ (tool_use messages)
+                   ▼
+         ┌─────────────────┐
+         │  Claude Code    │
+         │    客户端       │
+         └─────────────────┘
+```
+
+### 关键模块说明
+
+1. **`prompt_inject.ts`**: 工具模拟的核心。将工具定义转化为 XML 提示词，并将历史工具消息"退化"为纯文本。
+
+2. **`parser.ts`**: 智能解析器。实时监控上游输出流，识别触发信号并拦截提取 XML 工具调用指令。
+
+3. **`claude_writer.ts`**: 标准输出器。将 Parser 生成的事件（文本、思考、工具调用）封装成标准的 Claude SSE 格式。
+
+4. **`map_claude_to_openai.ts`**: 协议适配器。将增强后的请求映射为 OpenAI 格式的消息数组。
+
+5. **`upstream.ts`**: 上游转发器。统一处理 OpenAI 和 Anthropic 协议的流式请求。
+
+6. **`config.ts`**: 配置管理器。从环境变量加载渠道配置和全局设置。
+
+## API 端点
+
+### POST /v1/messages
+
+Claude Code 兼容的消息端点，支持工具调用。
+
+**请求示例**:
+
+```json
+{
+  "model": "my_openai+gpt-4o",
+  "messages": [
+    {"role": "user", "content": "What's the weather in San Francisco?"}
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get current weather",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "city": {"type": "string", "description": "City name"}
+        },
+        "required": ["city"]
+      }
+    }
+  ],
+  "max_tokens": 1024
+}
+```
+
+**响应**: SSE 流式响应，包含 `message_start`, `content_block_start`, `content_block_delta`, `message_delta`, `message_stop` 等事件。
+
+### POST /v1/messages/count_tokens
+
+Token 计数端点，用于估算请求的 token 消耗。
+
+**请求示例**:
+
+```json
+{
+  "model": "claude-3-sonnet-20240229",
+  "messages": [
+    {"role": "user", "content": "Hello, world"}
+  ]
+}
+```
+
+**响应**:
+
+```json
+{
+  "input_tokens": 135,
+  "output_tokens": null
+}
+```
+
+### GET /healthz
+
+健康检查端点。
+
+**响应**:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+## 部署指南
+
+### Docker 部署
+
+```bash
+# 构建镜像
+docker build -t cc-proxy:latest .
+
+# 运行容器
+docker run -d \
+  --name cc-proxy \
+  -p 3456:3456 \
+  -e CHANNEL_1_NAME=openai \
+  -e CHANNEL_1_BASE_URL=https://api.openai.com/v1/chat/completions \
+  -e CHANNEL_1_API_KEY=sk-xxx \
+  --restart unless-stopped \
+  cc-proxy:latest
+```
+
+### Docker Compose 部署
+
+```bash
+# 编辑 docker-compose.yml 配置环境变量
+nano docker-compose.yml
+
+# 启动服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+```
+
+### 生产环境部署
+
+详细的生产环境部署指南请参考 [部署文档](docs/deno-deployment-guide.md)，包括：
+
+- systemd 服务配置
+- 反向代理设置
+- SSL/TLS 配置
+- 日志轮转
+- 监控告警
+
+## 文档索引
+
+### 核心文档
+
+- 📘 [架构设计](docs/pipeline.md) - 详细的架构设计和工作流程
+- 📗 [开发计划](docs/deno-server-plan.md) - 项目开发路线图和实施计划
+- 📙 [使用示例](docs/deno-server-examples.md) - 完整的端到端请求响应示例
+- 📕 [运维手册](docs/deno-server-runbook.md) - 运维操作指南
+
+### 功能文档
+
+- 🔢 [Token 计数](docs/TOKEN_COUNTING.md) - Token 计数功能详解
+- 📝 [日志配置](docs/logging-configuration.md) - 日志系统配置说明
+
+### 部署文档
+
+- 🚀 [部署指南](docs/deno-deployment-guide.md) - 完整的部署指南
+- 📦 [文档导航](docs/README.md) - 文档中心和快速导航
 
 ## 故障排除
-- **工具不触发**: 检查上游模型的上下文长度和指令遵循能力。建议使用 1k 以上的 `max_tokens`。
-- **协议报错**: 确认 `CHANNEL_n_PROTOCOL` 是否与 `BASE_URL` 匹配。Anthropic 协议通常需要 `v1/messages` 端点。
+
+### 工具不触发
+
+**可能原因**:
+- 上游模型的上下文长度不足
+- 模型的指令遵循能力较弱
+- `max_tokens` 设置过小
+
+**解决方案**:
+- 使用指令遵循能力更强的模型（如 GPT-4、Claude 3.5）
+- 增加 `max_tokens` 至 1024 以上
+- 检查日志中的触发信号是否被正确识别
+
+### 协议报错
+
+**可能原因**:
+- `CHANNEL_n_PROTOCOL` 与 `BASE_URL` 不匹配
+- 端点地址配置错误
+
+**解决方案**:
+- 确认 Anthropic 协议使用 `v1/messages` 端点
+- 确认 OpenAI 协议使用 `v1/chat/completions` 端点
+- 检查日志中的上游响应状态码
+
+### Token 计数不准确
+
+**可能原因**:
+- 未配置 Claude API Key
+- 本地 tiktoken 算法与官方有差异
+
+**解决方案**:
+- 配置 `CLAUDE_API_KEY` 使用官方 API
+- 调整 `TOKEN_MULTIPLIER` 补偿差异
+- 参考 [Token 计数文档](docs/TOKEN_COUNTING.md)
+
+### 更多问题
+
+如遇到其他问题，请：
+
+1. 检查服务日志：`LOG_LEVEL=debug` 开启详细日志
+2. 查看 [Issues](https://github.com/Passerby1011/cc-proxy/issues)
+3. 提交新 Issue 并附上详细日志
+
+## 贡献指南
+
+欢迎贡献代码、文档或提出建议！
+
+### 开发流程
+
+1. Fork 本仓库
+2. 创建特性分支：`git checkout -b feature/amazing-feature`
+3. 提交更改：`git commit -m 'Add amazing feature'`
+4. 推送分支：`git push origin feature/amazing-feature`
+5. 提交 Pull Request
+
+### 代码规范
+
+- 使用 TypeScript 编写代码
+- 遵循 Deno 官方代码风格
+- 添加必要的注释和文档
+- 确保所有测试通过
+
+### 测试
+
+```bash
+# 运行单元测试
+deno test --allow-env --allow-net
+
+# 运行集成测试
+./scripts/test-proxy.sh
+```
 
 ## 许可证
-MIT
+
+本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
+
+## 致谢
+
+- 感谢 [Anthropic](https://www.anthropic.com/) 提供 Claude API
+- 感谢 [Deno](https://deno.land/) 提供优秀的运行时
+- 感谢所有贡献者的支持
+
+---
+
+**Made with ❤️ by the cc-proxy team**

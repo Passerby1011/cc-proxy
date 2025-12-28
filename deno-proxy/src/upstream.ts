@@ -1,111 +1,145 @@
-import { ProxyConfig, UpstreamConfig } from "./config.ts";
-import { OpenAIChatRequest } from "./types.ts";
-import { logRequest } from "./logging.ts";
+import { ProxyConfig } from "./config.ts";
+import { ClaudeRequest } from "./types.ts";
+import { SSEWriter } from "./sse.ts";
+import { log } from "./logging.ts";
+import { enrichClaudeRequest } from "./prompt_inject.ts";
+import { mapClaudeToOpenAI } from "./map_claude_to_openai.ts";
+import { handleOpenAIStream } from "./handle_openai_stream.ts";
+import { handleAnthropicStream } from "./handle_anthropic_stream.ts";
+import { countTokensWithTiktoken } from "./tiktoken.ts";
 
-/**
- * 解析客户端模型名，支持两种格式：
- * 1. 渠道+模型名：elysiver+claude-sonnet-4-5-20250929
- * 2. 普通模型名：claude-3.5-sonnet-20241022
- *
- * 返回 { channelName, modelName } 或 null（如果不是渠道+模型格式）
- */
-function parseChannelModel(clientModel: string): { channelName: string; modelName: string } | null {
-  const plusIndex = clientModel.indexOf("+");
-  if (plusIndex === -1) {
-    return null;
-  }
-  const channelName = clientModel.slice(0, plusIndex);
-  const modelName = clientModel.slice(plusIndex + 1);
-  return { channelName, modelName };
-}
-
-/**
- * 根据客户端请求的模型名选择上游配置。
- * 如果找到匹配的 nameModel，则返回对应的 UpstreamConfig；
- * 否则，如果存在旧配置（upstreamBaseUrl），则返回一个合成的 UpstreamConfig；
- * 否则抛出错误。
- */
-export function selectUpstreamConfig(
+export async function forwardRequest(
+  request: ClaudeRequest,
+  writer: SSEWriter,
   config: ProxyConfig,
-  clientModel: string,
-): UpstreamConfig {
-  // 尝试解析渠道+模型名格式
-  const channelModel = parseChannelModel(clientModel);
-  if (channelModel) {
-    // 查找匹配的渠道配置
-    const channel = config.channelConfigs.find((c) => c.name === channelModel.channelName);
-    if (channel) {
-      return {
-        baseUrl: channel.baseUrl,
-        apiKey: channel.apiKey,
-        requestModel: channelModel.modelName, // 透传模型名
-        nameModel: clientModel, // 保留完整的客户端模型名
-      };
-    }
-    // 如果没有找到渠道，继续尝试其他匹配方式
-  }
-
-  // 在多组配置中查找
-  for (const upstreamConfig of config.upstreamConfigs) {
-    if (upstreamConfig.nameModel === clientModel) {
-      return upstreamConfig;
-    }
-  }
-
-  // 如果没有多组配置，但存在旧配置，则使用旧配置
-  if (config.upstreamBaseUrl) {
-    return {
-      baseUrl: config.upstreamBaseUrl,
-      apiKey: config.upstreamApiKey,
-      requestModel: config.upstreamModelOverride ?? clientModel,
-      nameModel: clientModel,
-    };
-  }
-
-  throw new Error(`No upstream configuration found for model "${clientModel}"`);
-}
-
-export async function callUpstream(
-  upstreamReq: OpenAIChatRequest,
-  upstreamConfig: UpstreamConfig,
-  requestTimeoutMs: number,
   requestId: string,
-  clientApiKey?: string, // 可选的客户端 API key
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  clientApiKey?: string,
+) {
+  // 1. 自动选择上游配置
+  let baseUrl: string;
+  let apiKey: string | undefined;
+  let requestModel: string;
+  let protocol: "openai" | "anthropic";
 
-  const headers = new Headers({
-    "content-type": "application/json",
-  });
-
-  // 优先使用客户端透传的 API key，否则使用配置中的 API key
-  const apiKey = clientApiKey || upstreamConfig.apiKey;
-  if (apiKey) {
-    headers.set("authorization", `Bearer ${apiKey}`);
+  // 解析模型名：支持 "channel+model" 格式
+  const modelName = request.model;
+  const plusIndex = modelName.indexOf("+");
+  
+  if (plusIndex !== -1) {
+    const channelName = modelName.slice(0, plusIndex);
+    const actualModel = modelName.slice(plusIndex + 1);
+    const channel = config.channelConfigs.find(c => c.name === channelName);
+    
+    if (channel) {
+      baseUrl = channel.baseUrl;
+      apiKey = channel.apiKey;
+      requestModel = actualModel;
+      protocol = channel.protocol ?? config.defaultProtocol;
+    } else {
+      // 找不到渠道，回退逻辑
+      baseUrl = config.upstreamBaseUrl!;
+      apiKey = config.upstreamApiKey;
+      requestModel = modelName;
+      protocol = config.defaultProtocol;
+    }
+  } else {
+    // 没带冒号，使用默认上游或第一个渠道（如果存在）
+    if (config.channelConfigs.length > 0) {
+      const channel = config.channelConfigs[0];
+      baseUrl = channel.baseUrl;
+      apiKey = channel.apiKey;
+      requestModel = modelName;
+      protocol = channel.protocol ?? config.defaultProtocol;
+    } else {
+      baseUrl = config.upstreamBaseUrl!;
+      apiKey = config.upstreamApiKey;
+      requestModel = config.upstreamModelOverride ?? modelName;
+      protocol = config.defaultProtocol;
+    }
   }
 
-  await logRequest(requestId, "debug", "Sending upstream request", {
-    url: upstreamConfig.baseUrl,
-    upstreamRequestBody: upstreamReq,
+  // 如果启用了透传 API key，则优先使用客户端提供的 key
+  if (config.passthroughApiKey && clientApiKey) {
+    apiKey = clientApiKey;
+  }
+
+  // 2. 增强请求（注入工具、处理 Tool Blocks）
+  const { request: enrichedRequest, triggerSignal } = enrichClaudeRequest(request);
+
+  // 3. 准备转发请求
+  let fetchBody: string;
+  let finalUrl = baseUrl;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (protocol === "openai") {
+    const openaiReq = mapClaudeToOpenAI(enrichedRequest, requestModel);
+    fetchBody = JSON.stringify(openaiReq);
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
+  } else {
+    // Anthropic 协议
+    const anthropicReq = {
+      ...enrichedRequest,
+      model: requestModel,
+      stream: true,
+    };
+    fetchBody = JSON.stringify(anthropicReq);
+    if (apiKey) {
+      headers["x-api-key"] = apiKey;
+    }
+    headers["anthropic-version"] = "2023-06-01";
+  }
+
+  log("info", `Forwarding request to ${protocol} upstream`, {
+    requestId,
+    model: requestModel,
+    protocol,
+    url: finalUrl,
   });
 
-  let response: Response;
-  try {
-    response = await fetch(upstreamConfig.baseUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(upstreamReq),
-      signal: controller.signal,
+  // 4. 发送请求
+  const response = await fetch(finalUrl, {
+    method: "POST",
+    headers,
+    body: fetchBody,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    log("error", "Upstream request failed", {
+      requestId,
+      status: response.status,
+      error: errorText,
     });
-  } finally {
-    clearTimeout(timeout);
+    throw new Error(`Upstream returned ${response.status}: ${errorText}`);
   }
 
-  await logRequest(requestId, "debug", "Upstream response received", { status: response.status });
-  if (!response.body) {
-    throw new Error("Upstream response has no body");
-  }
+  // 5. 处理流式响应
+  const thinkingEnabled = request.thinking?.type === "enabled";
+  const inputTokens = countTokensWithTiktoken(fetchBody, "cl100k_base");
 
-  return response;
+  if (protocol === "openai") {
+    await handleOpenAIStream(
+      response,
+      writer,
+      config,
+      requestId,
+      triggerSignal,
+      thinkingEnabled,
+      inputTokens
+    );
+  } else {
+    await handleAnthropicStream(
+      response,
+      writer,
+      config,
+      requestId,
+      triggerSignal,
+      thinkingEnabled,
+      inputTokens
+    );
+  }
 }

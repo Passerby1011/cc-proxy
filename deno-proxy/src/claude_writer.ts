@@ -40,15 +40,12 @@ export class ClaudeStream {
       finished: false,
       totalOutputTokens: 0,
     };
-    // 对 tokenMultiplier 做防御性处理，避免后续出现 NaN/Infinity
     this.tokenMultiplier = Number.isFinite(config.tokenMultiplier) && config.tokenMultiplier > 0
       ? config.tokenMultiplier
       : 1.0;
-    // 存储 input tokens 以便在 message_start 中使用
     (this.context as any).inputTokens = inputTokens;
   }
 
-  // 发送 message_start 事件（完全按照官方格式）
   async init() {
     const inputTokens = (this.context as any).inputTokens || 0;
     await this.writer.send({
@@ -75,20 +72,15 @@ export class ClaudeStream {
   async handleEvents(events: ParserEvent[]) {
     for (const event of events) {
       if (event.type === "text") {
-        // 一旦开始输出可见文本，就不应该再继续向 thinking block 写入
-        // 确保任何打开的 thinking block 在进入文本阶段之前先关闭
         if (this.context.thinkingBlockOpen) {
           await this.endThinkingBlock();
         }
         this.context.aggregator.add(event.content);
       } else if (event.type === "thinking") {
-        // 思考内容前先把已有文本内容刷完并关闭 text block，避免 block 交叉复用 index
         await this.context.aggregator.flushAsync();
         await this.endTextBlock();
         await this.emitThinking(event.content);
       } else if (event.type === "tool_call") {
-        // 工具调用前需要关闭所有打开的内容块（text/thinking），
-        // 保证 tool_use block 的 index 不会和之前 block 复用
         await this.context.aggregator.flushAsync();
         await this.endTextBlock();
         await this.endThinkingBlock();
@@ -117,7 +109,6 @@ export class ClaudeStream {
   private async flushText(text: string) {
     if (!text) return;
     await this.ensureTextBlock();
-    // 使用 tiktoken 精确计算 token，然后应用倍数
     const estimatedTokens = countTokensWithTiktoken(text, "cl100k_base");
     this.context.totalOutputTokens += estimatedTokens;
     await this.writer.send({
@@ -168,7 +159,6 @@ export class ClaudeStream {
   private async emitThinking(content: string) {
     if (!content) return;
     await this.ensureThinkingBlock();
-    // 使用 tiktoken 精确计算 token，然后应用倍数
     const estimatedTokens = countTokensWithTiktoken(content, "cl100k_base");
     this.context.totalOutputTokens += estimatedTokens;
     await this.writer.send({
@@ -220,7 +210,6 @@ export class ClaudeStream {
     await this.endTextBlock();
     await this.endThinkingBlock();
     
-    // 应用 token 倍数到输出 token，防止出现 NaN/0
     const raw = this.context.totalOutputTokens * this.tokenMultiplier;
     const adjustedOutputTokens = Math.max(
       1,
@@ -244,7 +233,6 @@ export class ClaudeStream {
         },
       },
     }, true);
-    // 注意：虽然 ccr 会过滤 message_stop，但我们仍需发送它来标记流结束
     await this.writer.send({
       event: "message_stop",
       data: { type: "message_stop" },

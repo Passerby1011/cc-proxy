@@ -1,4 +1,8 @@
-import { ClaudeToolDefinition, OpenAIChatMessage, OpenAIChatRequest } from "./types.ts";
+import {
+  ClaudeContentBlock,
+  ClaudeRequest,
+  ClaudeToolDefinition,
+} from "./types.ts";
 import { randomTriggerSignal } from "./signals.ts";
 
 const DEFAULT_TEMPLATE = `
@@ -29,7 +33,7 @@ If you enter **MODE A**, you must adhere to these technical rules:
 When you decide to call a tool, you MUST output EXACTLY this trigger signal: {trigger_signal}
 The trigger signal MUST be output on a completely empty line by itself before any tool calls.
 Do NOT add any other text, spaces, or characters before or after {trigger_signal} on that line.
-You may provide explanations or reasoning before outputting {trigger_signal}, but once you decide to make a tool call, {trigger_signal} must come first.
+You may provide explanations or reasoning before outputting {trigger_signal}", but once you decide to make a tool call, {trigger_signal} must come first.
 You MUST output the trigger signal {trigger_signal} ONLY ONCE per response. Never output multiple trigger signals in a single response.
 
 After outputting the trigger signal, immediately provide your tool calls enclosed in <invoke> XML tags.
@@ -56,8 +60,12 @@ Your tool calls must be structured EXACTLY as follows. This is the ONLY format y
   - After invoking the tool,  you will receive the result of the tool call. Therefore,  please wait until you obtain the result from one tool call before invoking the next one 
   `;
 
+// 思考模式相关的常量定义
+const THINKING_START_TAG = "<thinking>";
+const THINKING_END_TAG = "</thinking>";
+
 function escapeText(text: string): string {
-  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text.replace(/</g, "<").replace(/>/g, ">");
 }
 
 function buildToolsXml(tools: ClaudeToolDefinition[]): string {
@@ -100,27 +108,97 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
   return `<function_list>\n${items}\n</function_list>`;
 }
 
-export interface PromptInjectionResult {
-  messages: OpenAIChatMessage[];
+/**
+ * 将工具消息块（tool_use, tool_result）和思考块转换为文本格式
+ */
+function normalizeBlocks(content: string | ClaudeContentBlock[], triggerSignal: string): string {
+  if (typeof content === "string") {
+    return content
+      .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
+      .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "");
+  }
+  return content.map((block) => {
+    if (block.type === "text") {
+      return block.text
+        .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
+        .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "");
+    }
+    if (block.type === "thinking") {
+      return `${THINKING_START_TAG}${block.thinking}${THINKING_END_TAG}`;
+    }
+    if (block.type === "tool_result") {
+      let toolResult: any = block.content ?? "";
+      if (typeof toolResult !== "string") {
+        if (Array.isArray(toolResult)) {
+          toolResult = toolResult
+            .filter((item: any) => item && item.type === "text")
+            .map((item: any) => item.text || "")
+            .join("\n");
+        } else if (typeof toolResult === "object" && toolResult !== null) {
+          toolResult = JSON.stringify(toolResult, null, 2);
+        }
+      }
+      return `[工具调用结果 - ID: ${block.tool_use_id}]\n${toolResult}`;
+    }
+    if (block.type === "tool_use") {
+      const params = Object.entries(block.input ?? {})
+        .map(([key, value]) => {
+          const stringValue = typeof value === "string" ? value : JSON.stringify(value);
+          return `<parameter name="${key}">${stringValue}</parameter>`;
+        })
+        .join("\n");
+      return `${triggerSignal}\n<invoke name="${block.name}">\n${params}\n</invoke>`;
+    }
+    return "";
+  }).join("\n");
+}
+
+export interface EnrichedClaudeRequest {
+  request: ClaudeRequest;
   triggerSignal?: string;
 }
 
-export function injectPrompt(request: OpenAIChatRequest, tools: ClaudeToolDefinition[], triggerSignal?: string): PromptInjectionResult {
+/**
+ * 增强 ClaudeRequest：注入工具定义并处理消息中的工具块
+ */
+export function enrichClaudeRequest(request: ClaudeRequest): EnrichedClaudeRequest {
+  const tools = request.tools ?? [];
   if (!tools.length) {
-    // 无工具时直接透传用户/系统消息，不注入任何工具指令
-    return { messages: request.messages };
+    // 即使没有工具，我们也可能需要处理历史消息中的文本过滤（防注入）
+    // 但为了保持原样，如果没工具就直接返回，历史消息中的 tool_use 理论上不该存在
+    return { request };
   }
 
-  const signal = triggerSignal ?? randomTriggerSignal();
+  const signal = randomTriggerSignal();
   const toolsXml = buildToolsXml(tools);
   const template = DEFAULT_TEMPLATE
     .replaceAll("{trigger_signal}", signal)
     .replace("{tools_list}", toolsXml);
 
-  const messages: OpenAIChatMessage[] = [
-    { role: "system", content: template },
-    ...request.messages,
-  ];
+  // 1. 处理 System Prompt
+  let systemContent = "";
+  if (request.system) {
+    if (typeof request.system === "string") {
+      systemContent = request.system;
+    } else {
+      systemContent = request.system.map(b => b.type === "text" ? b.text : "").join("\n");
+    }
+  }
+  const enrichedSystem = `${template}\n\n${systemContent}`.trim();
 
-  return { messages, triggerSignal: signal };
+  // 2. 处理 Messages
+  const enrichedMessages = request.messages.map(msg => ({
+    ...msg,
+    content: normalizeBlocks(msg.content, signal),
+  }));
+
+  // 3. 构造新请求（清空 tools，注入 system）
+  const enrichedRequest: ClaudeRequest = {
+    ...request,
+    system: enrichedSystem,
+    messages: enrichedMessages,
+    tools: undefined, // 清空上游工具定义，因为我们要模拟
+  };
+
+  return { request: enrichedRequest, triggerSignal: signal };
 }

@@ -4,21 +4,14 @@ export interface ChannelConfig {
   name: string; // 渠道名称，用于 channel+model 格式
   baseUrl: string;
   apiKey?: string;
-}
-
-export interface UpstreamConfig {
-  baseUrl: string;
-  apiKey?: string;
-  requestModel: string; // 实际向上游请求的模型名
-  nameModel: string; // 客户端使用的模型名，唯一
+  protocol?: "openai" | "anthropic"; // 渠道协议类型，默认为 openai
 }
 
 export interface ProxyConfig {
   port: number;
   host: string;
-  upstreamConfigs: UpstreamConfig[];
   channelConfigs: ChannelConfig[]; // 渠道配置，用于 channel+model 格式
-  // 向后兼容的旧字段（如果未设置 upstreamConfigs 则使用）
+  // 向后兼容的旧字段（如果未设置渠道配置则使用）
   upstreamBaseUrl?: string;
   upstreamApiKey?: string;
   upstreamModelOverride?: string;
@@ -29,6 +22,7 @@ export interface ProxyConfig {
   tokenMultiplier: number;
   autoPort: boolean;
   passthroughApiKey: boolean; // 是否将客户端 API key 透传给上游
+  defaultProtocol: "openai" | "anthropic"; // 默认上游协议
 }
 
 // 解析 TOKEN_MULTIPLIER，兼容常见字符串形式：
@@ -36,27 +30,6 @@ export interface ProxyConfig {
 // - "1.2x" / "x1.2"
 // - "120%" （表示 1.2）
 // - 带引号或空格的写法："'1.2'" / " 1.2 "
-function loadChannelConfigs(): ChannelConfig[] {
-  const configs: ChannelConfig[] = [];
-  let i = 1;
-  while (true) {
-    const name = Deno.env.get(`CHANNEL_${i}_NAME`);
-    const baseUrl = Deno.env.get(`CHANNEL_${i}_BASE_URL`);
-    const apiKey = Deno.env.get(`CHANNEL_${i}_API_KEY`);
-    if (!name || !baseUrl) {
-      // 如果缺少必要字段，停止搜索
-      break;
-    }
-    configs.push({
-      name,
-      baseUrl,
-      apiKey,
-    });
-    i++;
-  }
-  return configs;
-}
-
 function parseTokenMultiplier(raw: string | undefined): number {
   if (!raw) return 1.0;
 
@@ -90,23 +63,23 @@ function parseTokenMultiplier(raw: string | undefined): number {
   return num;
 }
 
-function loadUpstreamConfigs(): UpstreamConfig[] {
-  const configs: UpstreamConfig[] = [];
+function loadChannelConfigs(): ChannelConfig[] {
+  const configs: ChannelConfig[] = [];
   let i = 1;
   while (true) {
-    const baseUrl = Deno.env.get(`UPSTREAM_CONFIG_${i}_BASE_URL`);
-    const apiKey = Deno.env.get(`UPSTREAM_CONFIG_${i}_API_KEY`);
-    const requestModel = Deno.env.get(`UPSTREAM_CONFIG_${i}_REQUEST_MODEL`);
-    const nameModel = Deno.env.get(`UPSTREAM_CONFIG_${i}_NAME_MODEL`);
-    if (!baseUrl || !requestModel || !nameModel) {
-      // 如果缺少必要字段，停止搜索（假设没有更多配置）
+    const name = Deno.env.get(`CHANNEL_${i}_NAME`);
+    const baseUrl = Deno.env.get(`CHANNEL_${i}_BASE_URL`);
+    const apiKey = Deno.env.get(`CHANNEL_${i}_API_KEY`);
+    const protocol = (Deno.env.get(`CHANNEL_${i}_PROTOCOL`) || "openai") as "openai" | "anthropic";
+    if (!name || !baseUrl) {
+      // 如果缺少必要字段，停止搜索
       break;
     }
     configs.push({
+      name,
       baseUrl,
       apiKey,
-      requestModel,
-      nameModel,
+      protocol,
     });
     i++;
   }
@@ -131,22 +104,19 @@ export function loadConfig(): ProxyConfig {
   // 是否透传客户端 API key
   const passthroughApiKey = Deno.env.get("PASSTHROUGH_API_KEY") === "true";
 
+  // 默认协议
+  const defaultProtocol = (Deno.env.get("UPSTREAM_PROTOCOL") ?? "openai") as "openai" | "anthropic";
+
   // 加载渠道配置
   const channelConfigs = loadChannelConfigs();
 
-  // 加载多组上游配置
-  const upstreamConfigs = loadUpstreamConfigs();
-
-  // 向后兼容：如果未设置多组配置，则使用旧的环境变量
+  // 向后兼容：如果未设置任何渠道配置，则使用旧的环境变量
   let upstreamBaseUrl: string | undefined;
   let upstreamApiKey: string | undefined;
   let upstreamModelOverride: string | undefined;
 
-  if (upstreamConfigs.length === 0) {
+  if (channelConfigs.length === 0) {
     upstreamBaseUrl = Deno.env.get("UPSTREAM_BASE_URL") ?? "http://127.0.0.1:8000/v1/chat/completions";
-    if (!upstreamBaseUrl) {
-      throw new Error("UPSTREAM_BASE_URL must be provided when no UPSTREAM_CONFIG_* defined");
-    }
     upstreamApiKey = Deno.env.get("UPSTREAM_API_KEY");
     upstreamModelOverride = Deno.env.get("UPSTREAM_MODEL");
   }
@@ -154,7 +124,6 @@ export function loadConfig(): ProxyConfig {
   return {
     port,
     host,
-    upstreamConfigs,
     channelConfigs,
     upstreamBaseUrl,
     upstreamApiKey,
@@ -166,5 +135,6 @@ export function loadConfig(): ProxyConfig {
     tokenMultiplier,
     autoPort,
     passthroughApiKey,
+    defaultProtocol,
   };
 }

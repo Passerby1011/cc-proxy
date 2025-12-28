@@ -34,6 +34,6 @@ jobs:
       - name: Deploy to Deno Deploy
         uses: denoland/deployctl@v1
         with:
-          project: "b4u2cc-proxy"
+          project: "cc-proxy"
           entrypoint: "deno-proxy/src/main.ts"
           root: "."

@@ -1,15 +1,15 @@
-# 使用 docker compose 快速启动 b4u2cc 代理
+# 使用 docker compose 快速启动 cc-proxy 代理
 version: "3.8"
 
 services:
-  b4u2cc-proxy:
+  cc-proxy:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         DENO_VERSION: ${DENO_VERSION:-2.0.0}
-    image: b4u2cc-proxy:local
-    container_name: b4u2cc-proxy
+    image: cc-proxy:local
+    container_name: cc-proxy
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
@@ -31,8 +31,8 @@ services:
     volumes:
       - ./logs:/app/deno-proxy/logs
     networks:
-      - b4u2cc-net
+      - cc-proxy-net
 
 networks:
-  b4u2cc-net:
+  cc-proxy-net:
     driver: bridge

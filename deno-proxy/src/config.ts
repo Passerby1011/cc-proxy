@@ -63,18 +63,54 @@ function parseTokenMultiplier(raw: string | undefined): number {
   return num;
 }
 
-function loadChannelConfigs(): ChannelConfig[] {
+/**
+ * 根据 URL 自动识别协议类型
+ */
+export function detectProtocol(
+  baseUrl: string,
+  defaultProtocol: "openai" | "anthropic",
+): "openai" | "anthropic" {
+  try {
+    const url = new URL(baseUrl);
+    const path = url.pathname;
+
+    if (path.endsWith("/v1/chat/completions")) {
+      return "openai";
+    }
+    if (path.endsWith("/v1/messages")) {
+      return "anthropic";
+    }
+  } catch (_e) {
+    // 如果 URL 解析失败，尝试简单的字符串匹配
+    if (baseUrl.includes("/v1/chat/completions")) {
+      return "openai";
+    }
+    if (baseUrl.includes("/v1/messages")) {
+      return "anthropic";
+    }
+  }
+
+  return defaultProtocol;
+}
+
+function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelConfig[] {
   const configs: ChannelConfig[] = [];
   let i = 1;
   while (true) {
     const name = Deno.env.get(`CHANNEL_${i}_NAME`);
     const baseUrl = Deno.env.get(`CHANNEL_${i}_BASE_URL`);
     const apiKey = Deno.env.get(`CHANNEL_${i}_API_KEY`);
-    const protocol = (Deno.env.get(`CHANNEL_${i}_PROTOCOL`) || "openai") as "openai" | "anthropic";
+    const rawProtocol = Deno.env.get(`CHANNEL_${i}_PROTOCOL`);
+
     if (!name || !baseUrl) {
       // 如果缺少必要字段，停止搜索
       break;
     }
+
+    // 自动识别协议
+    const protocol = (rawProtocol as "openai" | "anthropic") ||
+      detectProtocol(baseUrl, defaultProtocol);
+
     configs.push({
       name,
       baseUrl,
@@ -108,7 +144,7 @@ export function loadConfig(): ProxyConfig {
   const defaultProtocol = (Deno.env.get("UPSTREAM_PROTOCOL") ?? "openai") as "openai" | "anthropic";
 
   // 加载渠道配置
-  const channelConfigs = loadChannelConfigs();
+  const channelConfigs = loadChannelConfigs(defaultProtocol);
 
   // 向后兼容：如果未设置任何渠道配置，则使用旧的环境变量
   let upstreamBaseUrl: string | undefined;
@@ -116,7 +152,8 @@ export function loadConfig(): ProxyConfig {
   let upstreamModelOverride: string | undefined;
 
   if (channelConfigs.length === 0) {
-    upstreamBaseUrl = Deno.env.get("UPSTREAM_BASE_URL") ?? "http://127.0.0.1:8000/v1/chat/completions";
+    upstreamBaseUrl = Deno.env.get("UPSTREAM_BASE_URL") ??
+      "http://127.0.0.1:8000/v1/chat/completions";
     upstreamApiKey = Deno.env.get("UPSTREAM_API_KEY");
     upstreamModelOverride = Deno.env.get("UPSTREAM_MODEL");
   }

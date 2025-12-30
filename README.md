@@ -155,7 +155,7 @@ curl -X POST http://localhost:3456/v1/messages \
 | `CHANNEL_{n}_NAME` | 是 | - | 渠道标识符，用于模型名前缀 |
 | `CHANNEL_{n}_BASE_URL` | 是 | - | 上游 API 地址 |
 | `CHANNEL_{n}_API_KEY` | 否 | - | 上游 API 密钥（可由客户端透传） |
-| `CHANNEL_{n}_PROTOCOL` | 否 | `openai` | 上游协议类型：`openai` 或 `anthropic` |
+| `CHANNEL_{n}_PROTOCOL` | 否 | 自动识别 | 上游协议类型：`openai` 或 `anthropic`。若未指定，将根据 `BASE_URL` 自动识别（`/v1/chat/completions` -> `openai`，`/v1/messages` -> `anthropic`） |
 
 **配置示例**:
 

@@ -1,5 +1,5 @@
 import { ParsedInvokeCall, ParsedThinkingCall, ParserEvent } from "./types.ts";
-import { log } from "./logging.ts";
+import { log, logPhase, LogPhase } from "./logging.ts";
 
 // 思考标签常量
 const THINKING_START_TAG = "<thinking>";
@@ -46,10 +46,12 @@ export class ToolifyParser {
   private thinkingMode = false;
   private thinkingBuffer = "";
   private readonly events: ParserEvent[] = [];
+  private readonly requestId?: string;
 
-  constructor(triggerSignal?: string, thinkingEnabled = false) {
+  constructor(triggerSignal?: string, thinkingEnabled = false, requestId?: string) {
     this.triggerSignal = triggerSignal;
     this.thinkingEnabled = thinkingEnabled;
+    this.requestId = requestId;
   }
 
   feedChar(char: string) {
@@ -193,10 +195,18 @@ export class ToolifyParser {
 
     const parsed = parseInvokeXml(invokeXml);
     if (parsed) {
-      log("debug", "Successfully parsed first invoke call", {
-        toolName: parsed.name,
-        argumentKeys: Object.keys(parsed.arguments),
-      });
+      // 使用新的日志格式
+      if (this.requestId) {
+        const argsPreview = JSON.stringify(parsed.arguments).slice(0, 50);
+        logPhase(this.requestId, LogPhase.TOOL, `${parsed.name}()`, {
+          args: argsPreview + (JSON.stringify(parsed.arguments).length > 50 ? "..." : ""),
+        });
+      } else {
+        log("debug", "Successfully parsed first invoke call", {
+          toolName: parsed.name,
+          argumentKeys: Object.keys(parsed.arguments),
+        });
+      }
       this.events.push({ type: "tool_call", call: parsed });
       
       // 过滤掉第一个工具调用后面的所有 <invoke>...</invoke> 标签

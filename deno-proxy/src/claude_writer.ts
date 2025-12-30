@@ -46,6 +46,10 @@ export class ClaudeStream {
     (this.context as any).inputTokens = inputTokens;
   }
 
+  getTotalOutputTokens(): number {
+    return this.context.totalOutputTokens;
+  }
+
   async init() {
     const inputTokens = (this.context as any).inputTokens || 0;
     await this.writer.send({

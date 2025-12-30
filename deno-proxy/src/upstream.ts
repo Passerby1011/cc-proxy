@@ -1,7 +1,7 @@
 import { ProxyConfig } from "./config.ts";
 import { ClaudeRequest } from "./types.ts";
 import { SSEWriter } from "./sse.ts";
-import { log } from "./logging.ts";
+import { log, logPhase, LogPhase } from "./logging.ts";
 import { enrichClaudeRequest } from "./prompt_inject.ts";
 import { mapClaudeToOpenAI } from "./map_claude_to_openai.ts";
 import { handleOpenAIStream } from "./handle_openai_stream.ts";
@@ -15,6 +15,7 @@ export async function forwardRequest(
   config: ProxyConfig,
   requestId: string,
   clientApiKey?: string,
+  abortSignal?: AbortSignal,
 ) {
   // 1. 自动选择上游配置
   let baseUrl: string;
@@ -66,6 +67,12 @@ export async function forwardRequest(
 
   // 2. 增强请求（注入工具、处理 Tool Blocks）
   const { request: enrichedRequest, triggerSignal } = enrichClaudeRequest(request);
+  
+  if (triggerSignal && request.tools && request.tools.length > 0) {
+    logPhase(requestId, LogPhase.ENRICHED, `Injected ${request.tools.length} tools`, {
+      signal: triggerSignal.slice(0, 15) + "...",
+    });
+  }
 
   // 3. 准备转发请求
   let fetchBody: string;
@@ -97,29 +104,30 @@ export async function forwardRequest(
     headers["anthropic-version"] = "2023-06-01";
   }
 
-  log("info", `Forwarding request to ${protocol} upstream`, {
-    requestId,
+  logPhase(requestId, LogPhase.UPSTREAM, `Forwarding to ${protocol.toUpperCase()}`, {
     model: requestModel,
-    protocol,
-    url: finalUrl,
+    url: finalUrl.split("/").pop(),
   });
 
   // 4. 发送请求
+  const upstreamStartTime = Date.now();
   const response = await fetch(finalUrl, {
     method: "POST",
     headers,
     body: fetchBody,
+    signal: abortSignal,
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    log("error", "Upstream request failed", {
-      requestId,
-      status: response.status,
-      error: errorText,
+    logPhase(requestId, LogPhase.ERROR, `Upstream failed (${response.status})`, {
+      error: errorText.slice(0, 200),
     });
     throw new Error(`Upstream returned ${response.status}: ${errorText}`);
   }
+  
+  const ttfb = Date.now() - upstreamStartTime;
+  logPhase(requestId, LogPhase.STREAM, `Receiving response (TTFB: ${ttfb}ms)`);
 
   // 5. 处理响应
   const thinkingEnabled = request.thinking?.type === "enabled";
@@ -127,7 +135,7 @@ export async function forwardRequest(
 
   if (isStream && writer) {
     if (protocol === "openai") {
-      await handleOpenAIStream(
+      const result = await handleOpenAIStream(
         response,
         writer,
         config,
@@ -136,8 +144,9 @@ export async function forwardRequest(
         thinkingEnabled,
         inputTokens,
       );
+      return { inputTokens, outputTokens: result?.outputTokens };
     } else {
-      await handleAnthropicStream(
+      const result = await handleAnthropicStream(
         response,
         writer,
         config,
@@ -146,6 +155,7 @@ export async function forwardRequest(
         thinkingEnabled,
         inputTokens,
       );
+      return { inputTokens, outputTokens: result?.outputTokens };
     }
   } else {
     // 非流式响应处理

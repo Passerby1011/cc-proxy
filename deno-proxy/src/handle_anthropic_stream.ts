@@ -13,7 +13,7 @@ export async function handleAnthropicStream(
   thinkingEnabled = false,
   inputTokens = 0,
 ) {
-  const parser = new ToolifyParser(triggerSignal, thinkingEnabled);
+  const parser = new ToolifyParser(triggerSignal, thinkingEnabled, requestId);
   const claudeStream = new ClaudeStream(writer, config, requestId, inputTokens);
 
   await claudeStream.init();
@@ -26,7 +26,28 @@ export async function handleAnthropicStream(
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let readResult;
+      try {
+        readResult = await reader.read();
+      } catch (readError) {
+        log("error", "Stream read error", {
+          error: String(readError),
+          requestId
+        });
+        // 通知客户端发生了流读取错误
+        await writer.send({
+          event: "error",
+          data: {
+            error: {
+              type: "stream_error",
+              message: "Failed to read from upstream: " + String(readError)
+            }
+          }
+        }, true);
+        break;
+      }
+
+      const { done, value } = readResult;
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -74,7 +95,23 @@ export async function handleAnthropicStream(
     await claudeStream.handleEvents(parser.consumeEvents());
   } catch (e) {
     log("error", "Error in Anthropic stream handling", { error: String(e), requestId });
+    // 尝试通知客户端发生了错误
+    try {
+      await writer.send({
+        event: "error",
+        data: {
+          error: {
+            type: "stream_error",
+            message: String(e)
+          }
+        }
+      }, true);
+    } catch {
+      // 忽略发送错误时的异常
+    }
   } finally {
     reader.releaseLock();
   }
+  
+  return { outputTokens: claudeStream.getTotalOutputTokens() };
 }

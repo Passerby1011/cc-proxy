@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std/http/server.ts";
 import { loadConfig, ProxyConfig } from "./config.ts";
-import { log, logRequest, closeRequestLog } from "./logging.ts";
+import { log, logRequest, closeRequestLog, logRequestStart, logRequestComplete, logPhase, LogPhase } from "./logging.ts";
 import { forwardRequest } from "./upstream.ts";
 import { SSEWriter } from "./sse.ts";
 import { ClaudeRequest } from "./types.ts";
@@ -41,6 +41,8 @@ function validateClientKey(req: Request, config: ProxyConfig): boolean {
 }
 
 async function handleMessages(req: Request, requestId: string) {
+  const startTime = Date.now();
+  
   if (!validateClientKey(req, config)) {
     return unauthorized();
   }
@@ -49,6 +51,16 @@ async function handleMessages(req: Request, requestId: string) {
   try {
     const rawBody = await req.text();
     body = JSON.parse(rawBody);
+    
+    // 使用新的请求开始日志格式
+    logRequestStart(requestId, {
+      method: "POST",
+      path: "/v1/messages",
+      model: body.model,
+      tools: body.tools?.length,
+      stream: body.stream === true,
+    });
+    
     await logRequest(requestId, "debug", "Received Claude request body", {
       rawPreview: body,
     });
@@ -69,30 +81,69 @@ async function handleMessages(req: Request, requestId: string) {
     const isStream = body.stream === true;
 
     if (isStream) {
+      // 创建中止控制器，用于在客户端断开时取消上游请求
+      const abortController = new AbortController();
+
       // 创建响应流
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           const writer = new SSEWriter(controller, requestId);
-          try {
-            // 调用统一的转发逻辑
-            await forwardRequest(body, writer, config, requestId, clientApiKey);
-            await logRequest(requestId, "info", "Completed processing request", {});
-          } catch (error) {
-            await logRequest(requestId, "error", "Request handling failure", { error: String(error) });
-            // 如果流还没关闭，尝试发送错误信息
-            try {
-              await writer.send({
-                event: "error",
-                data: { error: { type: "api_error", message: String(error) } },
-              }, true);
-            } catch {
-              // 忽略发送错误的错误
+
+          // 设置心跳机制，防止连接超时
+          const heartbeatInterval = setInterval(() => {
+            if (!writer.isClosed()) {
+              try {
+                controller.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+              } catch {
+                clearInterval(heartbeatInterval);
+              }
+            } else {
+              clearInterval(heartbeatInterval);
             }
-            controller.error(error);
+          }, 5000); // 每 5 秒发送心跳
+
+          try {
+            // 调用统一的转发逻辑，传入 abort signal
+            const result = await forwardRequest(body, writer, config, requestId, clientApiKey, abortController.signal);
+            
+            // 计算耗时和统计
+            const duration = Date.now() - startTime;
+            logRequestComplete(requestId, {
+              duration,
+              inputTokens: (result as any)?.inputTokens,
+              outputTokens: (result as any)?.outputTokens,
+            });
+          } catch (error) {
+            // 检查是否是因为客户端断开导致的中止
+            if (abortController.signal.aborted) {
+              await logRequest(requestId, "info", "Request aborted by client disconnect", {});
+            } else {
+              const duration = Date.now() - startTime;
+              logRequestComplete(requestId, {
+                duration,
+                error: String(error),
+              });
+              // 如果流还没关闭，尝试发送错误信息
+              try {
+                await writer.send({
+                  event: "error",
+                  data: { error: { type: "api_error", message: String(error) } },
+                }, true);
+              } catch {
+                // 忽略发送错误的错误
+              }
+              controller.error(error);
+            }
           } finally {
+            clearInterval(heartbeatInterval);
             await closeRequestLog(requestId);
             writer.close();
           }
+        },
+        cancel(reason) {
+          // 当客户端断开连接时，中止上游请求
+          log("info", "Client disconnected, aborting upstream request", { requestId, reason });
+          abortController.abort();
         },
       });
 
@@ -110,10 +161,17 @@ async function handleMessages(req: Request, requestId: string) {
       try {
         // forwardRequest 需要改造以支持非流式返回数据
         const result = await forwardRequest(body, undefined, config, requestId, clientApiKey);
-        await logRequest(requestId, "info", "Completed non-streaming request", {});
+        const duration = Date.now() - startTime;
+        logRequestComplete(requestId, {
+          duration,
+          inputTokens: (result as any)?.usage?.input_tokens,
+          outputTokens: (result as any)?.usage?.output_tokens,
+        });
         return jsonResponse(result);
       } catch (error) {
-        await logRequest(requestId, "error", "Non-streaming request handling failure", {
+        const duration = Date.now() - startTime;
+        logRequestComplete(requestId, {
+          duration,
           error: String(error),
         });
         return jsonResponse({ error: { type: "api_error", message: String(error) } }, 500);
@@ -183,13 +241,11 @@ export const handler = (req: Request) => {
 
   if (req.method === "POST" && url.pathname === "/v1/messages") {
     const requestId = crypto.randomUUID();
-    log("info", "Handling Claude message", { requestId });
     return handleMessages(req, requestId);
   }
 
   if (req.method === "POST" && url.pathname === "/v1/messages/count_tokens") {
     const requestId = crypto.randomUUID();
-    log("info", "Handling token count", { requestId });
     return handleTokenCount(req, requestId);
   }
 

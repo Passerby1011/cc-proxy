@@ -66,6 +66,10 @@ export class SSEWriter {
     return false;
   }
 
+  isClosed() {
+    return this.closed;
+  }
+
   close() {
     if (this.closed) return;
     this.closed = true;

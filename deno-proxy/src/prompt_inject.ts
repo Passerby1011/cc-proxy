@@ -109,24 +109,39 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
 }
 
 /**
- * 将工具消息块（tool_use, tool_result）和思考块转换为文本格式
+ * 将工具消息块（tool_use, tool_result）和思考块转换为文本格式，同时保留图片块
  */
-function normalizeBlocks(content: string | ClaudeContentBlock[], triggerSignal: string): string {
+function normalizeBlocks(
+  content: string | ClaudeContentBlock[],
+  triggerSignal: string,
+): ClaudeContentBlock[] {
   if (typeof content === "string") {
-    return content
-      .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
-      .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "");
-  }
-  return content.map((block) => {
-    if (block.type === "text") {
-      return block.text
+    return [{
+      type: "text",
+      text: content
         .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
-        .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "");
-    }
-    if (block.type === "thinking") {
-      return `${THINKING_START_TAG}${block.thinking}${THINKING_END_TAG}`;
-    }
-    if (block.type === "tool_result") {
+        .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, ""),
+    }];
+  }
+
+  const result: ClaudeContentBlock[] = [];
+
+  for (const block of content) {
+    if (block.type === "text") {
+      result.push({
+        type: "text",
+        text: block.text
+          .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
+          .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, ""),
+      });
+    } else if (block.type === "image") {
+      result.push(block);
+    } else if (block.type === "thinking") {
+      result.push({
+        type: "text",
+        text: `${THINKING_START_TAG}${block.thinking}${THINKING_END_TAG}`,
+      });
+    } else if (block.type === "tool_result") {
       let toolResult: any = block.content ?? "";
       if (typeof toolResult !== "string") {
         if (Array.isArray(toolResult)) {
@@ -138,19 +153,25 @@ function normalizeBlocks(content: string | ClaudeContentBlock[], triggerSignal: 
           toolResult = JSON.stringify(toolResult, null, 2);
         }
       }
-      return `[工具调用结果 - ID: ${block.tool_use_id}]\n${toolResult}`;
-    }
-    if (block.type === "tool_use") {
+      result.push({
+        type: "text",
+        text: `[工具调用结果 - ID: ${block.tool_use_id}]\n${toolResult}`,
+      });
+    } else if (block.type === "tool_use") {
       const params = Object.entries(block.input ?? {})
         .map(([key, value]) => {
           const stringValue = typeof value === "string" ? value : JSON.stringify(value);
           return `<parameter name="${key}">${stringValue}</parameter>`;
         })
         .join("\n");
-      return `${triggerSignal}\n<invoke name="${block.name}">\n${params}\n</invoke>`;
+      result.push({
+        type: "text",
+        text: `${triggerSignal}\n<invoke name="${block.name}">\n${params}\n</invoke>`,
+      });
     }
-    return "";
-  }).join("\n");
+  }
+
+  return result;
 }
 
 export interface EnrichedClaudeRequest {
@@ -187,7 +208,7 @@ export function enrichClaudeRequest(request: ClaudeRequest): EnrichedClaudeReque
   const enrichedSystem = `${template}\n\n${systemContent}`.trim();
 
   // 2. 处理 Messages
-  const enrichedMessages = request.messages.map(msg => ({
+  const enrichedMessages = request.messages.map((msg) => ({
     ...msg,
     content: normalizeBlocks(msg.content, signal),
   }));

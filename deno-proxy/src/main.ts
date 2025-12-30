@@ -65,42 +65,62 @@ async function handleMessages(req: Request, requestId: string) {
       ? rawClientKey
       : undefined;
 
-    // 创建响应流
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        const writer = new SSEWriter(controller, requestId);
-        try {
-          // 调用统一的转发逻辑
-          await forwardRequest(body, writer, config, requestId, clientApiKey);
-          await logRequest(requestId, "info", "Completed processing request", {});
-        } catch (error) {
-          await logRequest(requestId, "error", "Request handling failure", { error: String(error) });
-          // 如果流还没关闭，尝试发送错误信息
-          try {
-            await writer.send({
-              event: "error",
-              data: { error: { type: "api_error", message: String(error) } }
-            }, true);
-          } catch {
-            // 忽略发送错误的错误
-          }
-          controller.error(error);
-        } finally {
-          await closeRequestLog(requestId);
-          writer.close();
-        }
-      },
-    });
+    // 判断是否为流式请求
+    const isStream = body.stream !== false;
 
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        "connection": "keep-alive",
-        "access-control-allow-origin": "*",
-      },
-    });
+    if (isStream) {
+      // 创建响应流
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const writer = new SSEWriter(controller, requestId);
+          try {
+            // 调用统一的转发逻辑
+            await forwardRequest(body, writer, config, requestId, clientApiKey);
+            await logRequest(requestId, "info", "Completed processing request", {});
+          } catch (error) {
+            await logRequest(requestId, "error", "Request handling failure", { error: String(error) });
+            // 如果流还没关闭，尝试发送错误信息
+            try {
+              await writer.send({
+                event: "error",
+                data: { error: { type: "api_error", message: String(error) } },
+              }, true);
+            } catch {
+              // 忽略发送错误的错误
+            }
+            controller.error(error);
+          } finally {
+            await closeRequestLog(requestId);
+            writer.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          "connection": "keep-alive",
+          "access-control-allow-origin": "*",
+        },
+      });
+    } else {
+      // 非流式请求：直接等待 forwardRequest 完成并返回 JSON
+      try {
+        // forwardRequest 需要改造以支持非流式返回数据
+        const result = await forwardRequest(body, undefined, config, requestId, clientApiKey);
+        await logRequest(requestId, "info", "Completed non-streaming request", {});
+        return jsonResponse(result);
+      } catch (error) {
+        await logRequest(requestId, "error", "Non-streaming request handling failure", {
+          error: String(error),
+        });
+        return jsonResponse({ error: { type: "api_error", message: String(error) } }, 500);
+      } finally {
+        await closeRequestLog(requestId);
+      }
+    }
   } catch (error) {
     await logRequest(requestId, "error", "Failed to setup request stream", { error: String(error) });
     await closeRequestLog(requestId);

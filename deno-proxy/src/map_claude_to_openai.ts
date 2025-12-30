@@ -2,6 +2,8 @@ import {
   ClaudeRequest,
   OpenAIChatMessage,
   OpenAIChatRequest,
+  OpenAIContentBlock,
+  OpenAITextBlock,
 } from "./types.ts";
 
 // 思考模式相关的提示符
@@ -39,34 +41,60 @@ export function mapClaudeToOpenAI(
 
   // 2. 处理 Messages
   for (const message of body.messages) {
-    let content = "";
+    const openaiContent: OpenAIContentBlock[] = [];
+
     if (typeof message.content === "string") {
-      content = message.content;
+      openaiContent.push({ type: "text", text: message.content });
     } else {
-      // 理论上此时 content 已经是字符串了（由于 enrichClaudeRequest 的处理）
-      // 这里做个保险
-      content = message.content
-        .map(b => b.type === "text" ? b.text : "")
-        .join("\n");
+      for (const block of message.content) {
+        if (block.type === "text") {
+          openaiContent.push({ type: "text", text: block.text });
+        } else if (block.type === "image") {
+          openaiContent.push({
+            type: "image_url",
+            image_url: {
+              url: `data:${block.source.media_type};base64,${block.source.data}`,
+            },
+          });
+        }
+        // tool_use, tool_result, thinking 应该在 enrichClaudeRequest 中被转成了文本
+        // 如果这里还存在，说明 enrichClaudeRequest 没处理或者我们想保留它们的原生处理
+        // 目前为了简单，非文本非图片直接忽略或作为文本（如果在 content[] 里）
+      }
     }
-    
-    // 如果是用户消息且启用了思考模式，添加思考提示符
+
+    // 如果是用户消息且启用了思考模式，在最后一个文本块后添加思考提示符
     if (message.role === "user" && body.thinking && body.thinking.type === "enabled") {
-      // 这里简化了原先对 tool_result 的排除逻辑，因为此时 tool_result 已经是字符串中的一部分了
-      // 如果需要更精细控制，可能需要在 enrich 阶段打标记
-      content = content + THINKING_HINT;
+      const lastTextBlock = [...openaiContent].reverse().find((b) => b.type === "text") as
+        | OpenAITextBlock
+        | undefined;
+      if (lastTextBlock) {
+        lastTextBlock.text += THINKING_HINT;
+      } else {
+        openaiContent.push({ type: "text", text: THINKING_HINT });
+      }
     }
-    
+
     messages.push({
       role: mapRole(message.role),
-      content: content,
+      content: openaiContent,
     });
   }
 
   // 3. 在最后一条消息添加继续回复的引导（保持原有逻辑）
   if (messages.length > 0) {
     const lastMessage = messages[messages.length - 1];
-    lastMessage.content = lastMessage.content + "\n\n<antml\\b:role>\n\nPlease continue responding as an assistant.\n\n</antml>";
+    if (Array.isArray(lastMessage.content)) {
+      const lastTextBlock = [...lastMessage.content].reverse().find((b) => b.type === "text") as
+        | OpenAITextBlock
+        | undefined;
+      const hint = "\n\n<antml\\b:role>\n\nPlease continue responding as an assistant.\n\n</antml>";
+      if (lastTextBlock) {
+        lastTextBlock.text += hint;
+      } else {
+        lastMessage.content.push({ type: "text", text: hint });
+      }
+    }
   }
 
   return {

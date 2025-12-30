@@ -23,7 +23,21 @@ export interface ClaudeThinkingBlock {
   thinking: string;
 }
 
-export type ClaudeContentBlock = ClaudeTextBlock | ClaudeToolUseBlock | ClaudeToolResultBlock | ClaudeThinkingBlock;
+export interface ClaudeImageBlock {
+  type: "image";
+  source: {
+    type: "base64";
+    media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+    data: string;
+  };
+}
+
+export type ClaudeContentBlock =
+  | ClaudeTextBlock
+  | ClaudeToolUseBlock
+  | ClaudeToolResultBlock
+  | ClaudeThinkingBlock
+  | ClaudeImageBlock;
 
 export interface ClaudeMessage {
   role: ClaudeRole;
@@ -55,9 +69,24 @@ export interface ClaudeToolDefinition {
   input_schema: Record<string, unknown>;
 }
 
+export interface OpenAIImageURLBlock {
+  type: "image_url";
+  image_url: {
+    url: string; // data:image/jpeg;base64,xxxx
+    detail?: "auto" | "low" | "high";
+  };
+}
+
+export interface OpenAITextBlock {
+  type: "text";
+  text: string;
+}
+
+export type OpenAIContentBlock = OpenAITextBlock | OpenAIImageURLBlock;
+
 export interface OpenAIChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | OpenAIContentBlock[];
 }
 
 export interface OpenAIChatRequest {

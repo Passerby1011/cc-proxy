@@ -7,10 +7,11 @@ import { mapClaudeToOpenAI } from "./map_claude_to_openai.ts";
 import { handleOpenAIStream } from "./handle_openai_stream.ts";
 import { handleAnthropicStream } from "./handle_anthropic_stream.ts";
 import { countTokensWithTiktoken } from "./tiktoken.ts";
+import { ToolifyParser } from "./parser.ts";
 
 export async function forwardRequest(
   request: ClaudeRequest,
-  writer: SSEWriter,
+  writer: SSEWriter | undefined,
   config: ProxyConfig,
   requestId: string,
   clientApiKey?: string,
@@ -73,8 +74,11 @@ export async function forwardRequest(
     "Content-Type": "application/json",
   };
 
+  const isStream = request.stream !== false;
+
   if (protocol === "openai") {
     const openaiReq = mapClaudeToOpenAI(enrichedRequest, requestModel);
+    openaiReq.stream = isStream;
     fetchBody = JSON.stringify(openaiReq);
     if (apiKey) {
       headers["Authorization"] = `Bearer ${apiKey}`;
@@ -84,7 +88,7 @@ export async function forwardRequest(
     const anthropicReq = {
       ...enrichedRequest,
       model: requestModel,
-      stream: true,
+      stream: isStream,
     };
     fetchBody = JSON.stringify(anthropicReq);
     if (apiKey) {
@@ -117,29 +121,82 @@ export async function forwardRequest(
     throw new Error(`Upstream returned ${response.status}: ${errorText}`);
   }
 
-  // 5. 处理流式响应
+  // 5. 处理响应
   const thinkingEnabled = request.thinking?.type === "enabled";
   const inputTokens = countTokensWithTiktoken(fetchBody, "cl100k_base");
 
-  if (protocol === "openai") {
-    await handleOpenAIStream(
-      response,
-      writer,
-      config,
-      requestId,
-      triggerSignal,
-      thinkingEnabled,
-      inputTokens
-    );
+  if (isStream && writer) {
+    if (protocol === "openai") {
+      await handleOpenAIStream(
+        response,
+        writer,
+        config,
+        requestId,
+        triggerSignal,
+        thinkingEnabled,
+        inputTokens,
+      );
+    } else {
+      await handleAnthropicStream(
+        response,
+        writer,
+        config,
+        requestId,
+        triggerSignal,
+        thinkingEnabled,
+        inputTokens,
+      );
+    }
   } else {
-    await handleAnthropicStream(
-      response,
-      writer,
-      config,
-      requestId,
-      triggerSignal,
-      thinkingEnabled,
-      inputTokens
-    );
+    // 非流式响应处理
+    const json = await response.json();
+    if (protocol === "openai") {
+      // 将 OpenAI 非流式响应转换为 Claude 格式
+      // 注意：这里需要模拟 Toolify 解析逻辑，因为非流式响应也可能包含工具调用 XML
+      const rawContent = json.choices?.[0]?.message?.content ?? "";
+      const parser = new ToolifyParser(triggerSignal, thinkingEnabled);
+      for (const char of rawContent) {
+        parser.feedChar(char);
+      }
+      parser.finish();
+      const events = parser.consumeEvents();
+
+      const contentBlocks: any[] = [];
+      for (const event of events) {
+        if (event.type === "text") {
+          contentBlocks.push({ type: "text", text: event.content });
+        } else if (event.type === "thinking") {
+          // 非流式请求中，Anthropic 官方 API 不返回 thinking 块
+          // 因此我们不将其放入 contentBlocks
+          log("debug", "Excluding thinking block from non-streaming response", { requestId });
+        } else if (event.type === "tool_call") {
+          contentBlocks.push({
+            type: "tool_use",
+            id: `toolu_${crypto.randomUUID().split("-")[0]}`,
+            name: event.call.name,
+            input: event.call.arguments,
+          });
+        }
+      }
+
+      return {
+        id: `chatcmpl-${requestId}`,
+        type: "message",
+        role: "assistant",
+        model: requestModel,
+        content: contentBlocks.length > 0 ? contentBlocks : [{ type: "text", text: "" }],
+        stop_reason: contentBlocks.some((b) => b.type === "tool_use")
+          ? "tool_use"
+          : (json.choices?.[0]?.finish_reason === "stop" ? "end_turn" : json.choices?.[0]?.finish_reason),
+        stop_sequence: null,
+        usage: {
+          input_tokens: json.usage?.prompt_tokens ?? inputTokens,
+          output_tokens: json.usage?.completion_tokens ?? 0,
+        },
+      };
+    } else {
+      // Anthropic 非流式本身就是 Claude 格式，直接透传
+      return json;
+    }
   }
 }

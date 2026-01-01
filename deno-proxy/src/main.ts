@@ -48,17 +48,28 @@ async function handleMessages(req: Request, requestId: string) {
   }
 
   let body: ClaudeRequest;
+  let channelName: string | undefined;
+  
   try {
     const rawBody = await req.text();
     body = JSON.parse(rawBody);
     
+    // 解析渠道信息
+    const modelName = body.model;
+    const plusIndex = modelName.indexOf("+");
+    
+    if (plusIndex !== -1) {
+      channelName = modelName.slice(0, plusIndex);
+    } else if (config.channelConfigs.length > 0) {
+      channelName = config.channelConfigs[0].name;
+    }
+    
     // 使用新的请求开始日志格式
     logRequestStart(requestId, {
-      method: "POST",
-      path: "/v1/messages",
       model: body.model,
       tools: body.tools?.length,
       stream: body.stream === true,
+      channel: channelName,
     });
     
     await logRequest(requestId, "debug", "Received Claude request body", {

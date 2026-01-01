@@ -271,19 +271,20 @@ export function log(
 }
 
 // 特殊格式：请求开始横幅
-export function logRequestStart(requestId: string, meta: { method: string; path: string; model?: string; tools?: number; stream?: boolean }) {
+export function logRequestStart(requestId: string, meta: { model?: string; tools?: number; stream?: boolean; channel?: string }) {
   if (LOGGING_DISABLED || levelOrder.info < levelOrder[configuredLevel]) return;
   
   if (LOG_FORMAT === "pretty") {
     const shortId = requestId.slice(0, 8);
     const toolsInfo = meta.tools ? ` | ${colorize(`🔧 ${meta.tools} tools`, colors.magenta)}` : "";
     const streamInfo = meta.stream ? ` | ${colorize("📊 stream", colors.cyan)}` : "";
+    const channelInfo = meta.channel ? ` | ${colorize(`🌐 ${meta.channel}`, colors.blue)}` : "";
     
     console.log("");
     console.log(colorize("┌" + "─".repeat(60), colors.gray));
-    console.log(colorize("│", colors.gray) + ` ${LogPhase.REQUEST.icon} ${colorize(`[${LogPhase.REQUEST.label}]`, LogPhase.REQUEST.color)} ${colorize(shortId, colors.white)} | ${colorize(meta.method, colors.green)} ${colorize(meta.path, colors.cyan)}`);
+    console.log(colorize("│", colors.gray) + ` ${LogPhase.REQUEST.icon} ${colorize(`[${LogPhase.REQUEST.label}]`, LogPhase.REQUEST.color)} ${colorize(shortId, colors.white)}`);
     if (meta.model) {
-      console.log(colorize("│", colors.gray) + ` ${colorize("🎯", colors.yellow)} Model: ${colorize(meta.model, colors.white)}${toolsInfo}${streamInfo}`);
+      console.log(colorize("│", colors.gray) + ` ${colorize("🎯", colors.yellow)} Model: ${colorize(meta.model, colors.white)}${channelInfo}${toolsInfo}${streamInfo}`);
     }
     console.log(colorize("└" + "─".repeat(60), colors.gray));
   } else {

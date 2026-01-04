@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CC-Proxy Server</title>
+    <title>CC-Proxy</title>
     <style>
         * {
             margin: 0;
@@ -12,389 +12,406 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #000000;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
-            position: relative;
+            color: #ffffff;
+            padding: 24px;
         }
 
-        /* 背景动画粒子 */
-        .particles {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            z-index: 1;
-        }
-
-        .particle {
-            position: absolute;
-            width: 4px;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            animation: float 15s infinite;
-        }
-
-        @keyframes float {
-            0%, 100% { transform: translateY(0) translateX(0); opacity: 0; }
-            10% { opacity: 1; }
-            90% { opacity: 1; }
-            100% { transform: translateY(-100vh) translateX(100px); opacity: 0; }
-        }
-
-        /* 主容器 */
         .container {
-            position: relative;
-            z-index: 10;
+            max-width: 640px;
+            width: 100%;
+        }
+
+        /* Logo 区域 */
+        .logo-section {
             text-align: center;
-            color: white;
-            max-width: 900px;
-            padding: 40px;
+            margin-bottom: 64px;
         }
 
-        /* Logo 和标题区域 */
         .logo {
-            margin-bottom: 30px;
-            animation: fadeInDown 1s ease-out;
-        }
-
-        .logo-icon {
-            width: 100px;
-            height: 100px;
-            margin: 0 auto 20px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 24px;
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 24px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 0.5px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 48px;
-            backdrop-filter: blur(10px);
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            font-size: 32px;
+            transition: all 0.3s ease;
+        }
+
+        .logo:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.12);
         }
 
         h1 {
-            font-size: 56px;
-            font-weight: 700;
-            margin-bottom: 10px;
-            letter-spacing: -1px;
+            font-size: 32px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            margin-bottom: 12px;
+            color: #ffffff;
         }
 
-        .subtitle {
-            font-size: 18px;
-            opacity: 0.9;
-            margin-bottom: 40px;
+        .tagline {
+            font-size: 14px;
+            font-weight: 300;
+            color: rgba(255, 255, 255, 0.4);
+            letter-spacing: 0.02em;
         }
 
         /* 状态卡片 */
         .status-card {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(20px);
-            border-radius: 20px;
-            padding: 40px;
-            margin-bottom: 30px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            animation: fadeInUp 1s ease-out 0.2s backwards;
+            background: rgba(255, 255, 255, 0.03);
+            border: 0.5px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            transition: all 0.3s ease;
         }
 
-        .status-indicator {
-            display: inline-flex;
+        .status-card:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .status-header {
+            display: flex;
             align-items: center;
             gap: 12px;
-            margin-bottom: 20px;
+            margin-bottom: 8px;
         }
 
-        .pulse-dot {
-            width: 12px;
-            height: 12px;
-            background: #10b981;
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.9);
             border-radius: 50%;
             position: relative;
-            animation: pulse 2s infinite;
+            animation: pulse 2s ease-in-out infinite;
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.6; transform: scale(1.1); }
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
 
-        .pulse-dot::before {
+        .status-dot::before {
             content: '';
             position: absolute;
-            width: 100%;
-            height: 100%;
-            background: inherit;
+            top: -3px;
+            left: -3px;
+            right: -3px;
+            bottom: -3px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 50%;
-            animation: ripple 2s infinite;
+            animation: ripple 2s ease-in-out infinite;
         }
 
         @keyframes ripple {
             0% { transform: scale(1); opacity: 1; }
-            100% { transform: scale(2.5); opacity: 0; }
+            100% { transform: scale(1.5); opacity: 0; }
         }
 
-        .status-text {
-            font-size: 20px;
-            font-weight: 600;
+        .status-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: #ffffff;
         }
 
-        /* 每日名言 */
-        .quote-section {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(20px);
-            border-radius: 20px;
-            padding: 30px;
-            margin-bottom: 30px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            animation: fadeInUp 1s ease-out 0.4s backwards;
+        .status-desc {
+            font-size: 13px;
+            font-weight: 300;
+            color: rgba(255, 255, 255, 0.4);
+            line-height: 1.6;
+            padding-left: 20px;
         }
 
-        .quote-icon {
-            font-size: 36px;
-            margin-bottom: 15px;
-            opacity: 0.8;
+        /* 名言卡片 */
+        .quote-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 0.5px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 32px 24px;
+            margin-bottom: 48px;
+            transition: all 0.3s ease;
+        }
+
+        .quote-card:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .quote-mark {
+            font-size: 24px;
+            color: rgba(255, 255, 255, 0.2);
+            margin-bottom: 16px;
+            font-family: Georgia, serif;
         }
 
         .quote-text {
-            font-size: 22px;
-            line-height: 1.6;
-            margin-bottom: 15px;
-            font-style: italic;
-            min-height: 70px;
+            font-size: 16px;
+            font-weight: 400;
+            line-height: 1.7;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 16px;
+            letter-spacing: 0.01em;
         }
 
         .quote-author {
-            font-size: 16px;
-            opacity: 0.8;
+            font-size: 13px;
+            font-weight: 300;
+            color: rgba(255, 255, 255, 0.3);
+            letter-spacing: 0.02em;
         }
 
-        /* 按钮组 */
-        .actions {
+        /* 链接区域 */
+        .links {
             display: flex;
-            gap: 20px;
-            justify-content: center;
-            flex-wrap: wrap;
-            animation: fadeInUp 1s ease-out 0.6s backwards;
+            flex-direction: column;
+            gap: 12px;
         }
 
-        .btn {
-            padding: 16px 32px;
-            border-radius: 12px;
-            text-decoration: none;
-            font-size: 16px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            display: inline-flex;
+        .link-item {
+            display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: space-between;
+            padding: 16px 20px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 0.5px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            text-decoration: none;
+            color: rgba(255, 255, 255, 0.7);
+            transition: all 0.2s ease;
+            cursor: pointer;
         }
 
-        .btn-primary {
-            background: white;
-            color: #667eea;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        .link-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.9);
         }
 
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+        .link-content {
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
 
-        .btn-secondary {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.3);
+        .link-icon {
+            width: 20px;
+            height: 20px;
+            opacity: 0.5;
+            transition: opacity 0.2s ease;
         }
 
-        .btn-secondary:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
-        /* 统计信息 */
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-            margin-top: 30px;
-            animation: fadeInUp 1s ease-out 0.8s backwards;
-        }
-
-        .stat-item {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(20px);
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-        }
-
-        .stat-value {
-            font-size: 32px;
-            font-weight: 700;
-            margin-bottom: 5px;
-        }
-
-        .stat-label {
-            font-size: 14px;
+        .link-item:hover .link-icon {
             opacity: 0.8;
         }
 
-        /* 动画 */
-        @keyframes fadeInDown {
-            from {
-                opacity: 0;
-                transform: translateY(-30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        .link-text {
+            font-size: 14px;
+            font-weight: 400;
+            letter-spacing: 0.01em;
         }
 
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        .link-arrow {
+            font-size: 14px;
+            opacity: 0.3;
+            transition: all 0.2s ease;
+        }
+
+        .link-item:hover .link-arrow {
+            opacity: 0.6;
+            transform: translateX(2px);
+        }
+
+        /* 页脚 */
+        .footer {
+            margin-top: 48px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 300;
+            color: rgba(255, 255, 255, 0.2);
+            letter-spacing: 0.02em;
         }
 
         /* 响应式 */
-        @media (max-width: 768px) {
-            h1 { font-size: 40px; }
-            .quote-text { font-size: 18px; }
-            .container { padding: 20px; }
-            .status-card { padding: 30px 20px; }
+        @media (max-width: 640px) {
+            h1 {
+                font-size: 28px;
+            }
+            
+            .logo-section {
+                margin-bottom: 48px;
+            }
+            
+            .quote-card {
+                padding: 24px 20px;
+            }
+            
+            .quote-text {
+                font-size: 15px;
+            }
+        }
+
+        /* 平滑出现动画 */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .logo-section {
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        .status-card {
+            animation: fadeIn 0.6s ease-out 0.1s backwards;
+        }
+
+        .quote-card {
+            animation: fadeIn 0.6s ease-out 0.2s backwards;
+        }
+
+        .links {
+            animation: fadeIn 0.6s ease-out 0.3s backwards;
         }
     </style>
 </head>
 <body>
-    <!-- 背景粒子 -->
-    <div class="particles" id="particles"></div>
-
     <div class="container">
         <!-- Logo 区域 -->
-        <div class="logo">
-            <div class="logo-icon">⚡</div>
+        <div class="logo-section">
+            <div class="logo">⚡</div>
             <h1>CC-Proxy</h1>
-            <p class="subtitle">AI 代理服务器 - 让工具调用触手可及</p>
+            <p class="tagline">让工具调用触手可及</p>
         </div>
 
-        <!-- 运行状态 -->
+        <!-- 状态卡片 -->
         <div class="status-card">
-            <div class="status-indicator">
-                <div class="pulse-dot"></div>
-                <div class="status-text">服务运行中</div>
+            <div class="status-header">
+                <div class="status-dot"></div>
+                <div class="status-title">服务运行中</div>
             </div>
-            <p style="opacity: 0.9; font-size: 16px;">系统已启动并正常运行</p>
+            <div class="status-desc">代理服务已启动，随时准备处理请求</div>
         </div>
 
-        <!-- 每日名言 -->
-        <div class="quote-section">
-            <div class="quote-icon">💡</div>
-            <div class="quote-text" id="quote-text">加载中...</div>
+        <!-- 名言卡片 -->
+        <div class="quote-card">
+            <div class="quote-mark">"</div>
+            <div class="quote-text" id="quote-text"></div>
             <div class="quote-author" id="quote-author"></div>
         </div>
 
-        <!-- 操作按钮 -->
-        <div class="actions">
-            <a href="/admin" class="btn btn-primary">
-                <span>🎛️</span>
-                <span>管理后台</span>
+        <!-- 快速链接 -->
+        <div class="links">
+            <a href="/admin" class="link-item">
+                <div class="link-content">
+                    <svg class="link-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    <span class="link-text">管理后台</span>
+                </div>
+                <span class="link-arrow">→</span>
             </a>
-            <a href="/healthz" class="btn btn-secondary" target="_blank">
-                <span>❤️</span>
-                <span>健康检查</span>
+
+            <a href="/healthz" class="link-item" target="_blank">
+                <div class="link-content">
+                    <svg class="link-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <span class="link-text">健康检查</span>
+                </div>
+                <span class="link-arrow">↗</span>
             </a>
-            <a href="https://github.com/Passerby1011/cc-proxy" class="btn btn-secondary" target="_blank">
-                <span>📚</span>
-                <span>查看文档</span>
+
+            <a href="https://github.com/Passerby1011/cc-proxy" class="link-item" target="_blank">
+                <div class="link-content">
+                    <svg class="link-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                    </svg>
+                    <span class="link-text">项目文档</span>
+                </div>
+                <span class="link-arrow">↗</span>
             </a>
         </div>
 
-        <!-- 统计信息 -->
-        <div class="stats">
-            <div class="stat-item">
-                <div class="stat-value" id="uptime">00:00:00</div>
-                <div class="stat-label">运行时长</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value">∞</div>
-                <div class="stat-label">模型支持</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value">24/7</div>
-                <div class="stat-label">在线服务</div>
-            </div>
+        <!-- 页脚 -->
+        <div class="footer">
+            Made with precision
         </div>
     </div>
 
     <script>
-        // 每日名言数据
+        // 精选名言
         const quotes = [
-            { text: "技术的意义在于让不可能变为可能。", author: "— 开发者箴言" },
-            { text: "优秀的代码不仅能运行，更能优雅地解决问题。", author: "— 代码之道" },
-            { text: "创新就是将想象变为现实的过程。", author: "— 技术哲学" },
-            { text: "简单是最高级的复杂。", author: "— Leonardo da Vinci" },
-            { text: "让工具为人服务，而不是让人适应工具。", author: "— 用户体验准则" },
-            { text: "代码是写给人看的，只是恰好能被机器执行。", author: "— Harold Abelson" },
-            { text: "好的设计是显而易见的，伟大的设计是透明的。", author: "— Joe Sparano" },
-            { text: "编程不仅是科学，更是一门艺术。", author: "— Donald Knuth" },
-            { text: "专注于解决问题，而不是炫耀技术。", author: "— 工程师智慧" },
-            { text: "持续改进，永不止步。", author: "— 敏捷宣言" }
+            { 
+                text: "简单是最高级的复杂。设计的目标不是增加，而是去除。", 
+                author: "Leonardo da Vinci" 
+            },
+            { 
+                text: "优秀的代码不仅能运行，更能优雅地解决问题。", 
+                author: "Robert C. Martin" 
+            },
+            { 
+                text: "完美并非无可增添，而是无可删减。", 
+                author: "Antoine de Saint-Exupéry" 
+            },
+            { 
+                text: "让工具为人服务，而不是让人适应工具。", 
+                author: "Don Norman" 
+            },
+            { 
+                text: "代码是写给人看的，只是恰好能被机器执行。", 
+                author: "Harold Abelson" 
+            },
+            { 
+                text: "好的设计是显而易见的，伟大的设计是透明的。", 
+                author: "Joe Sparano" 
+            },
+            { 
+                text: "专注于本质，摒弃繁杂。真正的力量来自简洁。", 
+                author: "Bruce Lee" 
+            },
+            { 
+                text: "创新就是将想象变为现实的过程。", 
+                author: "Steve Jobs" 
+            },
+            { 
+                text: "细节不是细节，细节构成设计。", 
+                author: "Charles Eames" 
+            },
+            { 
+                text: "持续改进，永不止步。每一次迭代都是进步。", 
+                author: "Kaizen Philosophy" 
+            }
         ];
 
         // 显示随机名言
         function displayQuote() {
             const quote = quotes[Math.floor(Math.random() * quotes.length)];
             document.getElementById('quote-text').textContent = quote.text;
-            document.getElementById('quote-author').textContent = quote.author;
-        }
-
-        // 创建粒子效果
-        function createParticles() {
-            const particlesContainer = document.getElementById('particles');
-            const particleCount = 30;
-
-            for (let i = 0; i < particleCount; i++) {
-                const particle = document.createElement('div');
-                particle.className = 'particle';
-                particle.style.left = Math.random() * 100 + '%';
-                particle.style.animationDelay = Math.random() * 15 + 's';
-                particle.style.animationDuration = (15 + Math.random() * 10) + 's';
-                particlesContainer.appendChild(particle);
-            }
-        }
-
-        // 更新运行时长
-        const startTime = Date.now();
-        function updateUptime() {
-            const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            const hours = Math.floor(elapsed / 3600).toString().padStart(2, '0');
-            const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');
-            const seconds = (elapsed % 60).toString().padStart(2, '0');
-            document.getElementById('uptime').textContent = `${hours}:${minutes}:${seconds}`;
+            document.getElementById('quote-author').textContent = '— ' + quote.author;
         }
 
         // 初始化
         displayQuote();
-        createParticles();
-        updateUptime();
-        setInterval(updateUptime, 1000);
 
-        // 每小时更换一次名言
+        // 每小时更换名言
         setInterval(displayQuote, 3600000);
     </script>
 </body>

@@ -241,12 +241,24 @@ export const handler = async (req: Request) => {
   const adminResponse = await adminService.handleRequest(req);
   if (adminResponse) return adminResponse;
 
+  // 处理主页
+  if (req.method === "GET" && url.pathname === "/") {
+    try {
+      const html = await Deno.readTextFile(new URL("./index.html", import.meta.url));
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" }
+      });
+    } catch (e) {
+      return new Response("Index page not found: " + e.message, { status: 404 });
+    }
+  }
+
   // 处理 Admin UI 静态页面
   if (req.method === "GET" && (url.pathname === "/admin" || url.pathname === "/admin/")) {
     try {
       const html = await Deno.readTextFile(new URL("./admin_ui.html", import.meta.url));
       return new Response(html, {
-        headers: { "Content-Type": "text/html" }
+        headers: { "Content-Type": "text/html; charset=utf-8" }
       });
     } catch (e) {
       return new Response("Admin UI not found: " + e.message, { status: 404 });

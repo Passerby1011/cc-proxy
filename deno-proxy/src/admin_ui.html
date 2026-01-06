@@ -13,33 +13,90 @@
         }
     }
     </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-start: #f8fafc;
-            --bg-end: #f1f5f9;
-            --surface-0: #ffffff;
-            --surface-1: #ffffff;
-            --surface-hover: #f8fafc;
-            --border: #e2e8f0;
-            --text-primary: #0f172a;
-            --text-secondary: #475569;
-            --text-tertiary: #94a3b8;
-            --primary-accent: #0f172a;
-            --danger: #ef4444;
-            --success: #10b981;
-            --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-            --radius-md: 12px;
-            --radius-sm: 8px;
+            /* Light minimalist theme */
+            --bg-primary: #FFFFFF;
+            --bg-secondary: #F7F9FC;
+            --bg-tertiary: #E8ECF2;
+            --bg-gradient: linear-gradient(to bottom, #F7F9FC, #FFFFFF);
+
+            /* Card & surfaces */
+            --card-bg: #FFFFFF;
+            --card-border: #E0E0E0;
+            --card-hover: #F7F9FC;
+
+            /* Text colors */
+            --text-primary: #1A1A1A;
+            --text-secondary: #5C5C5C;
+            --text-tertiary: #A0A0A0;
+            --text-muted: #BDBDBD;
+
+            /* Accent colors - SaaS Professional Blue */
+            --accent-primary: #0066FF;
+            --accent-secondary: #0052CC;
+            --accent-hover: #003D99;
+            --accent-light: #E6F0FF;
+
+            /* Status colors */
+            --success: #10B981;
+            --success-light: #ECFDF5;
+            --danger: #EF4444;
+            --danger-light: #FEF2F2;
+            --warning: #F59E0B;
+            --warning-light: #FFFBEB;
+            --info: #3B82F6;
+            --info-light: #EFF6FF;
+
+            /* Shadows - Light and subtle */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.12);
+            --shadow-hover: 0 4px 16px rgba(0, 102, 255, 0.15);
+
+            /* Border radius - Subtle */
+            --radius-sm: 6px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+            --radius-xl: 16px;
+
+            /* Spacing */
             --spacing-xs: 8px;
             --spacing-sm: 16px;
             --spacing-md: 24px;
             --spacing-lg: 40px;
-            --font-sans: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --spacing-xl: 60px;
+
+            /* Fonts - Inter for professional look */
+            --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: var(--card-border) transparent;
+        }
+
+        *::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        *::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        *::-webkit-scrollbar-thumb {
+            background: var(--card-border);
+            border-radius: 4px;
+        }
+
+        *::-webkit-scrollbar-thumb:hover {
+            background: var(--text-tertiary);
         }
 
         body {
-            background: linear-gradient(to bottom, var(--bg-start), var(--bg-end));
-            background-attachment: fixed;
+            background: var(--bg-secondary);
             color: var(--text-primary);
             font-family: var(--font-sans);
             margin: 0;
@@ -47,28 +104,37 @@
             min-height: 100vh;
             box-sizing: border-box;
             -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
 
         /* Layout */
         .container {
-            max-width: 800px;
+            max-width: 1000px;
             margin: 0 auto;
             display: flex;
             flex-direction: column;
-            gap: var(--spacing-lg);
-            animation: fadeIn 0.4s ease-out;
+            gap: var(--spacing-md);
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            z-index: 1;
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(0.98);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
         }
 
         /* Typography */
         h1, h2, h3 {
             margin: 0;
             font-weight: 600;
-            letter-spacing: -0.01em;
+            letter-spacing: -0.02em;
         }
 
         h2 {
@@ -77,34 +143,39 @@
             color: var(--text-primary);
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
+            font-weight: 700;
         }
 
         h2 svg {
-            color: var(--text-secondary);
-            opacity: 0.7;
+            color: var(--accent-primary);
+            filter: drop-shadow(0 0 8px var(--success-glow));
         }
 
         label {
             display: block;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
             color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-size: 11px;
         }
 
-        /* Cards */
+        /* Cards - Clean minimal style */
         .card {
-            background: var(--surface-0);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-md);
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-lg);
             padding: 32px;
-            box-shadow: var(--shadow-card);
-            transition: border-color 0.2s ease;
+            box-shadow: var(--shadow-md);
+            transition: all 0.25s ease;
         }
-        
+
         .card:hover {
-            border-color: #cbd5e1;
+            box-shadow: var(--shadow-lg);
+            border-color: var(--accent-primary);
         }
 
         /* Inputs */
@@ -117,10 +188,10 @@
 
         input, select, textarea {
             width: 100%;
-            background: #ffffff;
-            border: 1px solid var(--border);
+            background: var(--bg-primary);
+            border: 1px solid var(--card-border);
             border-radius: var(--radius-sm);
-            padding: 10px 14px;
+            padding: 12px 16px;
             color: var(--text-primary);
             font-size: 14px;
             font-family: inherit;
@@ -128,20 +199,22 @@
             box-sizing: border-box;
         }
 
-        input:focus, select:focus {
+        input:focus, select:focus, textarea:focus {
             outline: none;
-            border-color: var(--text-primary);
-            box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.05);
+            border-color: var(--accent-primary);
+            background: var(--bg-primary);
+            box-shadow: 0 0 0 3px var(--accent-light);
         }
-        
+
         input::placeholder {
             color: var(--text-tertiary);
         }
-        
+
         input:disabled {
-            background: #f8fafc;
+            background: var(--bg-tertiary);
             color: var(--text-tertiary);
             cursor: not-allowed;
+            opacity: 0.6;
         }
 
         .checkbox-group {
@@ -150,24 +223,35 @@
             gap: 10px;
             cursor: pointer;
             user-select: none;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-sm);
+            transition: all 0.2s ease;
         }
-        
+
+        .checkbox-group:hover {
+            background: var(--card-hover);
+            border-color: var(--accent-primary);
+        }
+
         .checkbox-group input {
             width: 18px;
             height: 18px;
             margin: 0;
             cursor: pointer;
+            accent-color: var(--accent-primary);
         }
 
         /* Buttons */
         button {
-            background: #ffffff;
+            background: var(--bg-primary);
             color: var(--text-primary);
-            border: 1px solid var(--border);
+            border: 1px solid var(--card-border);
             border-radius: var(--radius-sm);
-            padding: 8px 16px;
+            padding: 10px 20px;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
             cursor: pointer;
             transition: all 0.2s ease;
             display: inline-flex;
@@ -177,31 +261,35 @@
         }
 
         button:hover:not(:disabled) {
-            background: var(--surface-hover);
-            border-color: #cbd5e1;
+            background: var(--card-hover);
+            border-color: var(--accent-primary);
+            box-shadow: var(--shadow-hover);
+            transform: translateY(-1px);
         }
-        
+
         button:active:not(:disabled) {
-            transform: translateY(1px);
+            transform: translateY(0);
         }
-        
+
         button:disabled {
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
         }
 
         button.primary {
-            background: var(--text-primary);
+            background: var(--accent-primary);
             color: #ffffff;
-            border-color: var(--text-primary);
-            font-weight: 600;
-            padding: 10px 24px;
+            border-color: var(--accent-primary);
+            font-weight: 700;
+            padding: 12px 28px;
+            box-shadow: var(--shadow-md);
         }
 
         button.primary:hover:not(:disabled) {
-            background: #1e293b;
-            border-color: #1e293b;
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+            background: var(--accent-secondary);
+            border-color: var(--accent-secondary);
+            box-shadow: var(--shadow-hover);
+            transform: translateY(-2px);
         }
 
         button.danger {
@@ -211,22 +299,24 @@
         }
 
         button.danger:hover:not(:disabled) {
-            background: #fef2f2;
-            border-color: #fee2e2;
+            background: var(--danger-light);
+            border-color: var(--danger);
         }
-        
+
         button.add-btn {
             width: 100%;
-            padding: 12px;
+            padding: 14px;
             background: transparent;
-            border: 1px dashed var(--border);
+            border: 1.5px dashed var(--card-border);
             color: var(--text-secondary);
+            font-weight: 600;
         }
-        
+
         button.add-btn:hover:not(:disabled) {
-            border-color: var(--text-secondary);
-            color: var(--text-primary);
-            background: #f8fafc;
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+            background: var(--accent-light);
+            border-style: solid;
         }
 
         /* Navigation */
@@ -235,51 +325,60 @@
             justify-content: space-between;
             align-items: center;
             padding: 0 4px;
+            margin-bottom: var(--spacing-md);
         }
 
         .nav-brand {
-            font-size: 16px;
-            font-weight: 700;
+            font-size: 18px;
+            font-weight: 800;
             color: var(--text-primary);
             text-decoration: none;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
+            letter-spacing: -0.02em;
         }
-        
+
         .nav-brand-icon {
-            width: 24px;
-            height: 24px;
-            background: var(--text-primary);
-            border-radius: 6px;
+            width: 32px;
+            height: 32px;
+            background: var(--accent-primary);
+            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
+            box-shadow: var(--shadow-md);
         }
 
         .status-badge {
             font-size: 12px;
-            padding: 6px 12px;
-            background: var(--surface-0);
+            padding: 8px 16px;
+            background: var(--card-bg);
             border-radius: 20px;
-            border: 1px solid var(--border);
+            border: 1px solid var(--card-border);
             color: var(--text-secondary);
             display: flex;
             align-items: center;
-            gap: 6px;
-            box-shadow: var(--shadow-card);
+            gap: 8px;
+            box-shadow: var(--shadow-sm);
+            font-weight: 600;
         }
-        
+
         .status-dot {
-            width: 6px;
-            height: 6px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
             background-color: var(--text-tertiary);
         }
-        
-        .status-dot.active { background-color: var(--success); }
-        .status-dot.error { background-color: var(--danger); }
+
+        .status-dot.active {
+            background-color: var(--success);
+        }
+
+        .status-dot.error {
+            background-color: var(--danger);
+        }
 
         /* Channel Items */
         .channel-list {
@@ -289,85 +388,98 @@
         }
 
         .channel-item {
-            background: #f8fafc;
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            padding: 20px;
-            position: relative;
+            background: var(--bg-secondary);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-md);
+            padding: 24px;
+            transition: all 0.2s ease;
+        }
+
+        .channel-item:hover {
+            background: var(--card-bg);
+            border-color: var(--accent-primary);
+            box-shadow: var(--shadow-md);
         }
 
         .channel-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 16px;
-            padding-bottom: 12px;
-            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--card-border);
         }
 
         .channel-index {
             font-size: 11px;
-            font-weight: 700;
-            color: var(--text-tertiary);
+            font-weight: 800;
+            color: var(--accent-primary);
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.1em;
+            padding: 4px 12px;
+            background: var(--accent-light);
+            border-radius: 6px;
+            border: 1px solid var(--accent-primary);
         }
 
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 16px;
+            gap: 20px;
         }
-        
+
         .grid-3 {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
-            gap: 16px;
+            gap: 20px;
         }
-        
-        @media (max-width: 600px) {
+
+        @media (max-width: 768px) {
             .grid-2, .grid-3 { grid-template-columns: 1fr; }
-            .card { padding: 20px; }
+            .card { padding: 24px; }
+            body { padding: var(--spacing-md) 16px; }
         }
-        
+
         .login-container {
             min-height: 80vh;
             display: flex;
             align-items: center;
             justify-content: center;
         }
-        
+
         .login-card {
             width: 100%;
-            max-width: 380px;
+            max-width: 420px;
         }
-        
+
         .helper-text {
             font-size: 12px;
             color: var(--text-tertiary);
-            margin-top: 4px;
+            margin-top: 6px;
+            line-height: 1.5;
         }
-        
+
         .section-title {
-            font-size: 12px;
-            font-weight: 700;
-            color: var(--text-tertiary);
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--text-secondary);
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 32px 0 16px 0;
+            letter-spacing: 0.1em;
+            margin: 40px 0 20px 0;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
         }
+
         .section-title:first-child { margin-top: 0; }
-        
+
         .section-title::after {
             content: "";
             flex: 1;
             height: 1px;
-            background: var(--border);
+            background: linear-gradient(90deg, var(--card-border), transparent);
         }
-        
+
         /* Sticky Actions */
         .sticky-actions {
             position: sticky;
@@ -377,10 +489,22 @@
             pointer-events: none;
             z-index: 100;
         }
-        
+
         .sticky-actions button {
             pointer-events: auto;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            box-shadow: var(--shadow-lg);
+        }
+
+        /* Selection styling */
+        ::selection {
+            background: var(--accent-light);
+            color: var(--text-primary);
+        }
+
+        /* Focus visible for accessibility */
+        *:focus-visible {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
         }
     </style>
 </head>
@@ -497,24 +621,28 @@
                 return html`
                     <div class="login-container">
                         <div class="container login-card">
-                            <div class="card">
-                                <h2 style="justify-content: center; margin-bottom: 24px; font-size: 20px">
-                                    <div class="nav-brand-icon"><${Icons.Zap} /></div>
-                                    CC-Proxy Admin
+                            <div class="card" style="text-align: center;">
+                                <h2 style="justify-content: center; margin-bottom: 32px; font-size: 22px; gap: 16px;">
+                                    <div class="nav-brand-icon" style="width: 48px; height: 48px; font-size: 24px;"><${Icons.Zap} /></div>
+                                    <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
+                                        <span>CC-Proxy Admin</span>
+                                        <span style="font-size: 12px; font-weight: 500; color: var(--text-tertiary); text-transform: none; letter-spacing: 0;">管理控制中心</span>
+                                    </div>
                                 </h2>
-                                <div class="form-group">
+                                <div class="form-group" style="text-align: left;">
                                     <label>管理 API 密钥</label>
-                                    <input type="password" 
+                                    <input type="password"
                                            placeholder="输入密钥以开始管理..."
-                                           value=${apiKey} 
-                                           onInput=${e => setApiKey(e.target.value)} 
+                                           value=${apiKey}
+                                           onInput=${e => setApiKey(e.target.value)}
                                            onKeyDown=${e => e.key === 'Enter' && (localStorage.setItem('admin_api_key', apiKey), fetchConfig(apiKey))}
+                                           style="font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace;"
                                     />
                                 </div>
-                                <button class="primary" style="width: 100%" onClick=${() => { localStorage.setItem('admin_api_key', apiKey); fetchConfig(apiKey); }} disabled=${loading}>
+                                <button class="primary" style="width: 100%; margin-top: 8px;" onClick=${() => { localStorage.setItem('admin_api_key', apiKey); fetchConfig(apiKey); }} disabled=${loading}>
                                     ${loading ? '验证中...' : '进入管理面板'}
                                 </button>
-                                ${msgType === 'error' && html`<p style="color: var(--danger); font-size: 13px; margin-top: 16px; text-align: center">${message}</p>`}
+                                ${msgType === 'error' && html`<p style="color: var(--danger); font-size: 13px; margin-top: 20px; padding: 12px; background: var(--danger-light); border-radius: var(--radius-sm); border: 1px solid var(--danger);">${message}</p>`}
                             </div>
                         </div>
                     </div>
@@ -529,7 +657,7 @@
                             CC-Proxy Dashboard
                         </a>
                         <div style="display: flex; gap: 12px; align-items: center">
-                            <button onClick=${() => fetchConfig()} disabled=${loading} title="从后端存储重新加载配置" style="padding: 6px 12px; font-size: 12px">
+                            <button onClick=${() => fetchConfig()} disabled=${loading} title="从后端存储重新加载配置" style="padding: 8px 14px; font-size: 12px">
                                 <${Icons.Refresh} /> 同步数据
                             </button>
                             <div class="status-badge">
@@ -541,8 +669,8 @@
 
                     <div class="card">
                         <h2><${Icons.Settings} /> 系统核心配置</h2>
-                        
-                        <div class="section-title">网络与协议</div>
+
+                        <div class="section-title"><${Icons.Globe} /> 网络与协议</div>
                         <div class="grid-3">
                             <div class="form-group">
                                 <label>服务端口</label>
@@ -574,7 +702,7 @@
                             </div>
                         </div>
 
-                        <div class="section-title">安全与访问控制</div>
+                        <div class="section-title"><${Icons.Shield} /> 安全与访问控制</div>
                         <div class="grid-2">
                             <div class="form-group">
                                 <label>客户端 API 密钥</label>
@@ -611,7 +739,7 @@
                         
                         <div class="channel-list">
                             ${(config.channelConfigs || []).length === 0 && html`
-                                <div class="section-title">向后兼容配置 (仅当无渠道时生效)</div>
+                                <div class="section-title" style="margin-top: 0;"><${Icons.Database} /> 向后兼容配置 (仅当无渠道时生效)</div>
                                 <div class="form-group">
                                     <label>默认上游 Base URL</label>
                                     <input value=${config.upstreamBaseUrl} onInput=${e => updateField('upstreamBaseUrl', e.target.value)} />

@@ -183,9 +183,9 @@ export async function forwardRequest(
           contentBlocks.push({ type: "text", text: event.content });
           outputBuffer += event.content;
         } else if (event.type === "thinking") {
-          // 非流式响应中我们也记录思考过程以便计算 token，但根据需求可能不返回给客户端
+          // 在非流式响应中也返回思考块,保持与 Anthropic API 标准一致
+          contentBlocks.push({ type: "thinking", thinking: event.content });
           outputBuffer += event.content;
-          log("debug", "Excluding thinking block from non-streaming response", { requestId });
         } else if (event.type === "tool_call") {
           contentBlocks.push({
             type: "tool_use",

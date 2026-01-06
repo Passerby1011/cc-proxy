@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CC-Proxy Admin</title>
+    <script type="importmap">
+    {
+        "imports": {
+            "preact": "https://esm.sh/preact@10.19.2",
+            "preact/hooks": "https://esm.sh/preact@10.19.2/hooks",
+            "htm": "https://esm.sh/htm@3.1.1"
+        }
+    }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* Light minimalist theme */
+            --bg-primary: #FFFFFF;
+            --bg-secondary: #F7F9FC;
+            --bg-tertiary: #E8ECF2;
+            --bg-gradient: linear-gradient(to bottom, #F7F9FC, #FFFFFF);
+
+            /* Card & surfaces */
+            --card-bg: #FFFFFF;
+            --card-border: #E0E0E0;
+            --card-hover: #F7F9FC;
+
+            /* Text colors */
+            --text-primary: #1A1A1A;
+            --text-secondary: #5C5C5C;
+            --text-tertiary: #A0A0A0;
+            --text-muted: #BDBDBD;
+
+            /* Accent colors - SaaS Professional Blue */
+            --accent-primary: #0066FF;
+            --accent-secondary: #0052CC;
+            --accent-hover: #003D99;
+            --accent-light: #E6F0FF;
+
+            /* Status colors */
+            --success: #10B981;
+            --success-light: #ECFDF5;
+            --danger: #EF4444;
+            --danger-light: #FEF2F2;
+            --warning: #F59E0B;
+            --warning-light: #FFFBEB;
+            --info: #3B82F6;
+            --info-light: #EFF6FF;
+
+            /* Shadows - Light and subtle */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.12);
+            --shadow-hover: 0 4px 16px rgba(0, 102, 255, 0.15);
+
+            /* Border radius - Subtle */
+            --radius-sm: 6px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+            --radius-xl: 16px;
+
+            /* Spacing */
+            --spacing-xs: 8px;
+            --spacing-sm: 16px;
+            --spacing-md: 24px;
+            --spacing-lg: 40px;
+            --spacing-xl: 60px;
+
+            /* Fonts - Inter for professional look */
+            --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: var(--card-border) transparent;
+        }
+
+        *::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        *::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        *::-webkit-scrollbar-thumb {
+            background: var(--card-border);
+            border-radius: 4px;
+        }
+
+        *::-webkit-scrollbar-thumb:hover {
+            background: var(--text-tertiary);
+        }
+
+        body {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            margin: 0;
+            padding: var(--spacing-lg) 20px;
+            min-height: 100vh;
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            z-index: 1;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 360px 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+
+        .col-left {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            position: sticky;
+            top: 24px;
+        }
+        
+        /* Optimize inputs for the narrower sidebar column */
+        .col-left .grid-3, 
+        .col-left .grid-2 {
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+
+        .col-right {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            min-width: 0; /* Prevent grid blowout */
+        }
+
+        @media (max-width: 1000px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+            .col-left {
+                position: static;
+            }
+            .col-left .grid-3 {
+                grid-template-columns: 1fr 1fr 1fr;
+            }
+            .col-left .grid-2 {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(0.98);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        /* Typography */
+        h1, h2, h3 {
+            margin: 0;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        h2 {
+            font-size: 18px;
+            margin-bottom: var(--spacing-md);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 700;
+        }
+
+        h2 svg {
+            color: var(--accent-primary);
+            filter: drop-shadow(0 0 8px var(--success-glow));
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-size: 11px;
+        }
+
+        /* Cards - Clean minimal style */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-lg);
+            padding: 32px;
+            box-shadow: var(--shadow-md);
+            transition: all 0.25s ease;
+        }
+
+        .card:hover {
+            box-shadow: var(--shadow-lg);
+            border-color: var(--accent-primary);
+        }
+
+        /* Inputs */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            background: var(--bg-primary);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-sm);
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s ease;
+            box-sizing: border-box;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            background: var(--bg-primary);
+            box-shadow: 0 0 0 3px var(--accent-light);
+        }
+
+        input::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        input:disabled {
+            background: var(--bg-tertiary);
+            color: var(--text-tertiary);
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-sm);
+            transition: all 0.2s ease;
+        }
+
+        .checkbox-group:hover {
+            background: var(--card-hover);
+            border-color: var(--accent-primary);
+        }
+
+        .checkbox-group input {
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            cursor: pointer;
+            accent-color: var(--accent-primary);
+        }
+
+        /* Buttons */
+        button {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-sm);
+            padding: 10px 20px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--card-hover);
+            border-color: var(--accent-primary);
+            box-shadow: var(--shadow-hover);
+            transform: translateY(-1px);
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        button.primary {
+            background: var(--accent-primary);
+            color: #ffffff;
+            border-color: var(--accent-primary);
+            font-weight: 700;
+            padding: 12px 28px;
+            box-shadow: var(--shadow-md);
+        }
+
+        button.primary:hover:not(:disabled) {
+            background: var(--accent-secondary);
+            border-color: var(--accent-secondary);
+            box-shadow: var(--shadow-hover);
+            transform: translateY(-2px);
+        }
+
+        button.danger {
+            color: var(--danger);
+            border-color: transparent;
+            background: transparent;
+        }
+
+        button.danger:hover:not(:disabled) {
+            background: var(--danger-light);
+            border-color: var(--danger);
+        }
+
+        button.add-btn {
+            width: 100%;
+            padding: 14px;
+            background: transparent;
+            border: 1.5px dashed var(--card-border);
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        button.add-btn:hover:not(:disabled) {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+            background: var(--accent-light);
+            border-style: solid;
+        }
+
+        /* Navigation */
+        .nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 4px;
+            margin-bottom: var(--spacing-md);
+        }
+
+        .nav-brand {
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--text-primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            letter-spacing: -0.02em;
+        }
+
+        .nav-brand-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--accent-primary);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            box-shadow: var(--shadow-md);
+        }
+
+        .status-badge {
+            font-size: 12px;
+            padding: 8px 16px;
+            background: var(--card-bg);
+            border-radius: 20px;
+            border: 1px solid var(--card-border);
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: var(--shadow-sm);
+            font-weight: 600;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--text-tertiary);
+        }
+
+        .status-dot.active {
+            background-color: var(--success);
+        }
+
+        .status-dot.error {
+            background-color: var(--danger);
+        }
+
+        /* Channel Items */
+        .channel-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .channel-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-md);
+            padding: 24px;
+            transition: all 0.2s ease;
+        }
+
+        .channel-item:hover {
+            background: var(--card-bg);
+            border-color: var(--accent-primary);
+            box-shadow: var(--shadow-md);
+        }
+
+        .channel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        .channel-index {
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--accent-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            padding: 4px 12px;
+            background: var(--accent-light);
+            border-radius: 6px;
+            border: 1px solid var(--accent-primary);
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
+            .card { padding: 24px; }
+            body { padding: var(--spacing-md) 16px; }
+        }
+
+        .login-container {
+            min-height: 80vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+        }
+
+        .helper-text {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-top: 6px;
+            line-height: 1.5;
+        }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin: 40px 0 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .section-title:first-child { margin-top: 0; }
+
+        .section-title::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, var(--card-border), transparent);
+        }
+
+        /* Sticky Actions */
+        .sticky-actions {
+            position: sticky;
+            bottom: 32px;
+            display: flex;
+            justify-content: flex-end;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        .sticky-actions button {
+            pointer-events: auto;
+            box-shadow: var(--shadow-lg);
+        }
+
+        /* Selection styling */
+        ::selection {
+            background: var(--accent-light);
+            color: var(--text-primary);
+        }
+
+        /* Focus visible for accessibility */
+        *:focus-visible {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    <script type="module">
+        import { h, render } from 'preact';
+        import { useState, useEffect } from 'preact/hooks';
+        import htm from 'htm';
+
+        const html = htm.bind(h);
+        
+        // Icons
+        const Icons = {
+            Settings: () => html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 10-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 10 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`,
+            Layers: () => html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
+            Save: () => html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>`,
+            Plus: () => html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`,
+            Trash: () => html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+            Refresh: () => html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`,
+            Zap: () => html`<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>`,
+            Shield: () => html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
+            Database: () => html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>`,
+            Globe: () => html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
+            Activity: () => html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>`,
+            Tag: () => html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>`
+        };
+
+        function App() {
+            const [config, setConfig] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [apiKey, setApiKey] = useState(localStorage.getItem('admin_api_key') || '');
+            const [message, setMessage] = useState('');
+            const [msgType, setMsgType] = useState('');
+
+            const fetchConfig = async (key) => {
+                const targetKey = key || apiKey;
+                if (!targetKey) return;
+                setLoading(true);
+                try {
+                    const res = await fetch('/admin/api/config', {
+                        headers: { 'Authorization': `Bearer ${targetKey}` }
+                    });
+                    if (res.status === 401) {
+                        setMessage('未授权，请输入 Admin API Key');
+                        setMsgType('error');
+                        setLoading(false);
+                        return;
+                    }
+                    const data = await res.json();
+                    setConfig(data);
+                    setMessage('已连接');
+                    setMsgType('success');
+                } catch (e) {
+                    setMessage('连接失败: ' + e.message);
+                    setMsgType('error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(() => {
+                if (apiKey) fetchConfig(apiKey);
+                else setLoading(false);
+            }, []);
+
+            const saveConfig = async () => {
+                setMessage('正在保存...');
+                setMsgType('');
+                try {
+                    const res = await fetch('/admin/api/config', {
+                        method: 'POST',
+                        headers: { 
+                            'Authorization': `Bearer ${apiKey}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(config)
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        setMessage('设置已成功更新');
+                        setMsgType('success');
+                        setTimeout(() => setMessage('已连接'), 3000);
+                    } else {
+                        setMessage('更新失败: ' + data.error);
+                        setMsgType('error');
+                    }
+                } catch (e) {
+                    setMessage('网络错误: ' + e.message);
+                    setMsgType('error');
+                }
+            };
+
+            const updateField = (field, value) => {
+                setConfig({ ...config, [field]: value });
+            };
+
+            const updateChannel = (index, field, value) => {
+                const newChannels = [...config.channelConfigs];
+                newChannels[index] = { ...newChannels[index], [field]: value };
+                setConfig({ ...config, channelConfigs: newChannels });
+            };
+
+            const addChannel = () => {
+                const newChannels = [...(config.channelConfigs || []), { name: '', baseUrl: '', apiKey: '', protocol: config.defaultProtocol || 'openai' }];
+                setConfig({ ...config, channelConfigs: newChannels });
+            };
+
+            const removeChannel = (index) => {
+                if(!confirm('确认移除该渠道？')) return;
+                const newChannels = config.channelConfigs.filter((_, i) => i !== index);
+                setConfig({ ...config, channelConfigs: newChannels });
+            };
+
+            if (!config) {
+                return html`
+                    <div class="login-container">
+                        <div class="container login-card">
+                            <div class="card" style="text-align: center;">
+                                <h2 style="justify-content: center; margin-bottom: 32px; font-size: 22px; gap: 16px;">
+                                    <div class="nav-brand-icon" style="width: 48px; height: 48px; font-size: 24px;"><${Icons.Zap} /></div>
+                                    <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
+                                        <span>CC-Proxy Admin</span>
+                                        <span style="font-size: 12px; font-weight: 500; color: var(--text-tertiary); text-transform: none; letter-spacing: 0;">管理控制中心</span>
+                                    </div>
+                                </h2>
+                                <div class="form-group" style="text-align: left;">
+                                    <label>管理 API 密钥</label>
+                                    <input type="password"
+                                           placeholder="输入密钥以开始管理..."
+                                           value=${apiKey}
+                                           onInput=${e => setApiKey(e.target.value)}
+                                           onKeyDown=${e => e.key === 'Enter' && (localStorage.setItem('admin_api_key', apiKey), fetchConfig(apiKey))}
+                                           style="font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace;"
+                                    />
+                                </div>
+                                <button class="primary" style="width: 100%; margin-top: 8px;" onClick=${() => { localStorage.setItem('admin_api_key', apiKey); fetchConfig(apiKey); }} disabled=${loading}>
+                                    ${loading ? '验证中...' : '进入管理面板'}
+                                </button>
+                                ${msgType === 'error' && html`<p style="color: var(--danger); font-size: 13px; margin-top: 20px; padding: 12px; background: var(--danger-light); border-radius: var(--radius-sm); border: 1px solid var(--danger);">${message}</p>`}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            return html`
+                <div class="container">
+                    <div class="nav">
+                        <a href="#" class="nav-brand">
+                            <div class="nav-brand-icon"><${Icons.Zap} /></div>
+                            CC-Proxy Dashboard
+                        </a>
+                        <div style="display: flex; gap: 12px; align-items: center">
+                            <button onClick=${() => fetchConfig()} disabled=${loading} title="从后端存储重新加载配置" style="padding: 8px 14px; font-size: 12px">
+                                <${Icons.Refresh} /> 同步数据
+                            </button>
+                            <div class="status-badge">
+                                <div class="status-dot ${msgType === 'success' ? 'active' : (msgType === 'error' ? 'error' : '')}"></div>
+                                ${message}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="main-grid">
+                        <div class="col-left">
+                            <div class="card">
+                                <h2><${Icons.Settings} /> 系统核心配置</h2>
+
+                                <div class="section-title"><${Icons.Globe} /> 网络与协议</div>
+                                <div class="grid-3">
+                                    <div class="form-group">
+                                        <label>服务端口</label>
+                                        <input type="number" value=${config.port} onInput=${e => updateField('port', parseInt(e.target.value))} />
+                                        <div class="helper-text">0 表示随机分配</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>绑定地址</label>
+                                        <input type="text" value=${config.host} onInput=${e => updateField('host', e.target.value)} />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>默认上游协议</label>
+                                        <select value=${config.defaultProtocol} onChange=${e => updateField('defaultProtocol', e.target.value)}>
+                                            <option value="openai">OpenAI Standard</option>
+                                            <option value="anthropic">Anthropic Claude</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="section-title"><${Icons.Activity} /> 性能与并发</div>
+                                <div class="grid-2">
+                                    <div class="form-group">
+                                        <label>请求超时 (ms)</label>
+                                        <input type="number" value=${config.requestTimeoutMs} onInput=${e => updateField('requestTimeoutMs', parseInt(e.target.value))} />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>聚合间隔 (ms)</label>
+                                        <input type="number" value=${config.aggregationIntervalMs} onInput=${e => updateField('aggregationIntervalMs', parseInt(e.target.value))} />
+                                        <div class="helper-text">流式响应聚合时间窗口</div>
+                                    </div>
+                                </div>
+
+                                <div class="section-title"><${Icons.Shield} /> 安全与访问控制</div>
+                                <div class="grid-2">
+                                    <div class="form-group">
+                                        <label>客户端 API 密钥</label>
+                                        <input type="password" placeholder="留空则不验证" value=${config.clientApiKey} onInput=${e => updateField('clientApiKey', e.target.value)} />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>管理 API 密钥</label>
+                                        <input type="password" value=${config.adminApiKey} onInput=${e => updateField('adminApiKey', e.target.value)} />
+                                    </div>
+                                </div>
+
+                                <div class="section-title"><${Icons.Tag} /> 限制与计费</div>
+                                <div class="grid-2">
+                                    <div class="form-group">
+                                        <label>每分钟频率限制 (RPM)</label>
+                                        <input type="number" value=${config.maxRequestsPerMinute} onInput=${e => updateField('maxRequestsPerMinute', parseInt(e.target.value))} />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Token 价格乘数</label>
+                                        <input type="number" step="0.1" value=${config.tokenMultiplier} onInput=${e => updateField('tokenMultiplier', parseFloat(e.target.value))} />
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label class="checkbox-group">
+                                        <input type="checkbox" checked=${config.passthroughApiKey} onChange=${e => updateField('passthroughApiKey', e.target.checked)} />
+                                        <span>透传客户端 API 密钥给上游</span>
+                                    </label>
+                                    <div class="helper-text" style="margin-left: 28px">启用后，将使用客户端发送的 API Key 而非配置的密钥</div>
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <h2><${Icons.Database} /> 数据存储与持久化</h2>
+                                <div class="form-group">
+                                    <label>PostgreSQL DSN</label>
+                                    <input type="password" placeholder="postgresql://user:pass@host:port/db" value=${config.pgStoreDsn} onInput=${e => updateField('pgStoreDsn', e.target.value)} />
+                                    <div class="helper-text">留空则使用本地内存/文件存储。修改此项后需重启应用。</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>当前加载的配置文件</label>
+                                    <input disabled value=${config.configFilePath || '环境变量加载'} />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-right">
+                            <div class="card">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+                                    <h2 style="margin-bottom: 0;"><${Icons.Layers} /> 渠道与上游管理</h2>
+                                    <button class="primary" style="padding: 8px 16px; font-size: 12px;" onClick=${addChannel}>
+                                        <${Icons.Plus} /> 新建节点
+                                    </button>
+                                </div>
+                                
+                                <div class="channel-list">
+                                    ${(config.channelConfigs || []).length === 0 && html`
+                                        <div class="section-title" style="margin-top: 0;"><${Icons.Database} /> 向后兼容配置 (仅当无渠道时生效)</div>
+                                        <div class="form-group">
+                                            <label>默认上游 Base URL</label>
+                                            <input value=${config.upstreamBaseUrl} onInput=${e => updateField('upstreamBaseUrl', e.target.value)} />
+                                        </div>
+                                        <div class="grid-2">
+                                            <div class="form-group">
+                                                <label>默认上游 API Key</label>
+                                                <input type="password" value=${config.upstreamApiKey} onInput=${e => updateField('upstreamApiKey', e.target.value)} />
+                                            </div>
+                                            <div class="form-group">
+                                                <label>强制模型覆盖 (可选)</label>
+                                                <input placeholder="例如: gpt-4o" value=${config.upstreamModelOverride} onInput=${e => updateField('upstreamModelOverride', e.target.value)} />
+                                            </div>
+                                        </div>
+                                    `}
+
+                                    ${(config.channelConfigs || []).map((ch, i) => html`
+                                        <div class="channel-item">
+                                            <div class="channel-header">
+                                                <span class="channel-index">多渠道节点 #${i + 1}</span>
+                                                <button class="danger" onClick=${() => removeChannel(i)}>
+                                                    <${Icons.Trash} /> 移除节点
+                                                </button>
+                                            </div>
+                                            <div class="grid-2">
+                                                <div class="form-group">
+                                                    <label>渠道标识</label>
+                                                    <input placeholder="如: gpt-4o" value=${ch.name} onInput=${e => updateChannel(i, 'name', e.target.value)} />
+                                                </div>
+                                                <div class="form-group">
+                                                    <label>协议类型</label>
+                                                    <select value=${ch.protocol} onChange=${e => updateChannel(i, 'protocol', e.target.value)}>
+                                                        <option value="openai">OpenAI</option>
+                                                        <option value="anthropic">Anthropic</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div class="form-group">
+                                                <label>上游 Base URL</label>
+                                                <input placeholder="https://api.openai.com/v1/chat/completions" value=${ch.baseUrl} onInput=${e => updateChannel(i, 'baseUrl', e.target.value)} />
+                                            </div>
+                                            <div class="form-group" style="margin-bottom: 0">
+                                                <label>上游 API 密钥</label>
+                                                <input type="password" placeholder="sk-..." value=${ch.apiKey} onInput=${e => updateChannel(i, 'apiKey', e.target.value)} />
+                                            </div>
+                                        </div>
+                                    `)}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sticky-actions">
+                        <button class="primary" onClick=${saveConfig}>
+                            <${Icons.Save} /> 保存所有更改
+                        </button>
+                    </div>
+                    
+                    <div style="height: 60px"></div>
+                </div>
+            `;
+        }
+
+        render(html`<${App} />`, document.getElementById('app'));
+    </script>
+</body>
+</html>

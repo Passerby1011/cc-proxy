@@ -23,6 +23,19 @@ export interface ProxyConfig {
   autoPort: boolean;
   passthroughApiKey: boolean; // 是否将客户端 API key 透传给上游
   defaultProtocol: "openai" | "anthropic"; // 默认上游协议
+  // Web UI 管理配置
+  adminApiKey?: string;
+  pgStoreDsn?: string;
+  configFilePath?: string;
+}
+
+/**
+ * 存储层接口定义
+ */
+export interface ConfigStorage {
+  load(): Promise<Partial<ProxyConfig>>;
+  save(config: Partial<ProxyConfig>): Promise<void>;
+  healthCheck(): Promise<boolean>;
 }
 
 // 解析 TOKEN_MULTIPLIER，兼容常见字符串形式：
@@ -123,6 +136,10 @@ function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelCon
 }
 
 export function loadConfig(): ProxyConfig {
+  const adminApiKey = Deno.env.get("ADMIN_API_KEY");
+  const pgStoreDsn = Deno.env.get("PGSTORE_DSN");
+  const configFilePath = Deno.env.get("CONFIG_FILE_PATH");
+
   // 检查是否启用自动端口配置
   const autoPort = Deno.env.get("AUTO_PORT") === "true";
   
@@ -173,5 +190,8 @@ export function loadConfig(): ProxyConfig {
     autoPort,
     passthroughApiKey,
     defaultProtocol,
+    adminApiKey,
+    pgStoreDsn,
+    configFilePath,
   };
 }

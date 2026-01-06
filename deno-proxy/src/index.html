@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CC-Proxy</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #fafafa;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #1a1a1a;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 640px;
+            width: 100%;
+        }
+
+        /* Logo 区域 */
+        .logo-section {
+            text-align: center;
+            margin-bottom: 64px;
+        }
+
+        .logo {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 24px;
+            background: #ffffff;
+            border: 1px solid #e5e5e5;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .logo:hover {
+            border-color: #d4d4d4;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            margin-bottom: 12px;
+            color: #1a1a1a;
+        }
+
+        .tagline {
+            font-size: 14px;
+            font-weight: 400;
+            color: #737373;
+            letter-spacing: 0.01em;
+        }
+
+        /* 状态卡片 */
+        .status-card {
+            background: #ffffff;
+            border: 1px solid #e5e5e5;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .status-card:hover {
+            border-color: #d4d4d4;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .status-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            position: relative;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .status-dot::before {
+            content: '';
+            position: absolute;
+            top: -3px;
+            left: -3px;
+            right: -3px;
+            bottom: -3px;
+            border: 1px solid #10b981;
+            border-radius: 50%;
+            opacity: 0.3;
+            animation: ripple 2s ease-in-out infinite;
+        }
+
+        @keyframes ripple {
+            0% { transform: scale(1); opacity: 0.3; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+
+        .status-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: #1a1a1a;
+        }
+
+        .status-desc {
+            font-size: 13px;
+            font-weight: 400;
+            color: #737373;
+            line-height: 1.6;
+            padding-left: 20px;
+        }
+
+        /* 名言卡片 */
+        .quote-card {
+            background: #ffffff;
+            border: 1px solid #e5e5e5;
+            border-radius: 12px;
+            padding: 32px 24px;
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .quote-card:hover {
+            border-color: #d4d4d4;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .quote-mark {
+            font-size: 24px;
+            color: #d4d4d4;
+            margin-bottom: 16px;
+            font-family: Georgia, serif;
+        }
+
+        .quote-text {
+            font-size: 16px;
+            font-weight: 400;
+            line-height: 1.7;
+            color: #404040;
+            margin-bottom: 16px;
+            letter-spacing: 0.01em;
+        }
+
+        .quote-author {
+            font-size: 13px;
+            font-weight: 400;
+            color: #737373;
+            letter-spacing: 0.01em;
+        }
+
+        /* 页脚 */
+        .footer {
+            margin-top: 48px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 400;
+            color: #a3a3a3;
+            letter-spacing: 0.02em;
+        }
+
+        /* 响应式 */
+        @media (max-width: 640px) {
+            h1 {
+                font-size: 28px;
+            }
+            
+            .logo-section {
+                margin-bottom: 48px;
+            }
+            
+            .quote-card {
+                padding: 24px 20px;
+            }
+            
+            .quote-text {
+                font-size: 15px;
+            }
+        }
+
+        /* 平滑出现动画 */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .logo-section {
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        .status-card {
+            animation: fadeIn 0.6s ease-out 0.1s backwards;
+        }
+
+        .quote-card {
+            animation: fadeIn 0.6s ease-out 0.2s backwards;
+        }
+
+        .footer {
+            animation: fadeIn 0.6s ease-out 0.3s backwards;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Logo 区域 -->
+        <div class="logo-section">
+            <div class="logo">⚡</div>
+            <h1>CC-Proxy</h1>
+            <p class="tagline">让工具调用触手可及</p>
+        </div>
+
+        <!-- 状态卡片 -->
+        <div class="status-card">
+            <div class="status-header">
+                <div class="status-dot"></div>
+                <div class="status-title">服务运行中</div>
+            </div>
+            <div class="status-desc">代理服务已启动，随时准备处理请求</div>
+        </div>
+
+        <!-- 名言卡片 -->
+        <div class="quote-card">
+            <div class="quote-mark">"</div>
+            <div class="quote-text" id="quote-text"></div>
+            <div class="quote-author" id="quote-author"></div>
+        </div>
+
+        <!-- 页脚 -->
+        <div class="footer">
+            Made with precision
+        </div>
+    </div>
+
+    <script>
+        // 精选名言
+        const quotes = [
+            { 
+                text: "简单是最高级的复杂。设计的目标不是增加，而是去除。", 
+                author: "Leonardo da Vinci" 
+            },
+            { 
+                text: "优秀的代码不仅能运行，更能优雅地解决问题。", 
+                author: "Robert C. Martin" 
+            },
+            { 
+                text: "完美并非无可增添，而是无可删减。", 
+                author: "Antoine de Saint-Exupéry" 
+            },
+            { 
+                text: "让工具为人服务，而不是让人适应工具。", 
+                author: "Don Norman" 
+            },
+            { 
+                text: "代码是写给人看的，只是恰好能被机器执行。", 
+                author: "Harold Abelson" 
+            },
+            { 
+                text: "好的设计是显而易见的，伟大的设计是透明的。", 
+                author: "Joe Sparano" 
+            },
+            { 
+                text: "专注于本质，摒弃繁杂。真正的力量来自简洁。", 
+                author: "Bruce Lee" 
+            },
+            { 
+                text: "创新就是将想象变为现实的过程。", 
+                author: "Steve Jobs" 
+            },
+            { 
+                text: "细节不是细节，细节构成设计。", 
+                author: "Charles Eames" 
+            },
+            { 
+                text: "持续改进，永不止步。每一次迭代都是进步。", 
+                author: "Kaizen Philosophy" 
+            }
+        ];
+
+        // 显示随机名言
+        function displayQuote() {
+            const quote = quotes[Math.floor(Math.random() * quotes.length)];
+            document.getElementById('quote-text').textContent = quote.text;
+            document.getElementById('quote-author').textContent = '— ' + quote.author;
+        }
+
+        // 初始化
+        displayQuote();
+
+        // 每小时更换名言
+        setInterval(displayQuote, 3600000);
+    </script>
+</body>
+</html>

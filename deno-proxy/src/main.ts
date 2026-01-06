@@ -6,9 +6,16 @@ import { SSEWriter } from "./sse.ts";
 import { ClaudeRequest } from "./types.ts";
 import { RateLimiter } from "./rate_limiter.ts";
 import { countTokens } from "./token_counter.ts";
+import { AdminService } from "./admin_service.ts";
 
-const config = loadConfig();
-const rateLimiter = new RateLimiter(config.maxRequestsPerMinute, 60_000);
+const initialConfig = loadConfig();
+const adminService = new AdminService(initialConfig);
+await adminService.init();
+
+// 代理逻辑应始终使用来自 adminService 的最新配置
+const getConfig = () => adminService.getCurrentConfig();
+
+const rateLimiter = new RateLimiter(getConfig().maxRequestsPerMinute, 60_000);
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -42,6 +49,7 @@ function validateClientKey(req: Request, config: ProxyConfig): boolean {
 
 async function handleMessages(req: Request, requestId: string) {
   const startTime = Date.now();
+  const config = getConfig();
   
   if (!validateClientKey(req, config)) {
     return unauthorized();
@@ -198,6 +206,7 @@ async function handleMessages(req: Request, requestId: string) {
 }
 
 async function handleTokenCount(req: Request, requestId: string) {
+  const config = getConfig();
   if (!validateClientKey(req, config)) {
     return unauthorized();
   }
@@ -225,15 +234,35 @@ async function handleTokenCount(req: Request, requestId: string) {
   }
 }
 
-export const handler = (req: Request) => {
+export const handler = async (req: Request) => {
   const url = new URL(req.url);
 
+  // 优先处理 Admin API
+  const adminResponse = await adminService.handleRequest(req);
+  if (adminResponse) return adminResponse;
+
+  // 处理主页
   if (req.method === "GET" && url.pathname === "/") {
-    const html = `<!DOCTYPE html><html><head><title>cc-proxy</title></head><body><h1>cc-proxy Server</h1><p>Server is running</p></body></html>`;
-    return new Response(html, {
-      status: 200,
-      headers: { "content-type": "text/html" }
-    });
+    try {
+      const html = await Deno.readTextFile(new URL("./index.html", import.meta.url));
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" }
+      });
+    } catch (e) {
+      return new Response("Index page not found: " + e.message, { status: 404 });
+    }
+  }
+
+  // 处理 Admin UI 静态页面
+  if (req.method === "GET" && (url.pathname === "/admin" || url.pathname === "/admin/")) {
+    try {
+      const html = await Deno.readTextFile(new URL("./admin_ui.html", import.meta.url));
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" }
+      });
+    } catch (e) {
+      return new Response("Admin UI not found: " + e.message, { status: 404 });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/healthz") {
@@ -264,5 +293,6 @@ export const handler = (req: Request) => {
 };
 
 if (import.meta.main) {
+  const config = getConfig();
   serve(handler, config.autoPort ? undefined : { hostname: config.host, port: config.port });
 }

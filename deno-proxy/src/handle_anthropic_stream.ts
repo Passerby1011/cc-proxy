@@ -3,18 +3,19 @@ import { ClaudeStream } from "./claude_writer.ts";
 import { SSEWriter } from "./sse.ts";
 import { ProxyConfig } from "./config.ts";
 import { log } from "./logging.ts";
+import { ToolCallDelimiter } from "./signals.ts";
 
 export async function handleAnthropicStream(
   response: Response,
   writer: SSEWriter,
   config: ProxyConfig,
   requestId: string,
-  triggerSignal?: string,
+  delimiter?: ToolCallDelimiter,
   thinkingEnabled = false,
   inputTokens = 0,
   model = "claude-3-5-sonnet-20241022",
 ) {
-  const parser = new ToolifyParser(triggerSignal, thinkingEnabled, requestId);
+  const parser = new ToolifyParser(delimiter, thinkingEnabled, requestId);
   const claudeStream = new ClaudeStream(writer, config, requestId, inputTokens, model);
 
   await claudeStream.init();

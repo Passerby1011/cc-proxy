@@ -3,7 +3,7 @@ import {
   ClaudeRequest,
   ClaudeToolDefinition,
 } from "./types.ts";
-import { randomTriggerSignal } from "./signals.ts";
+import { ToolCallDelimiter } from "./signals.ts";
 
 const DEFAULT_TEMPLATE = `
 You are an intelligent assistant equipped with specific tools. Your behavior changes based on the user's request type.
@@ -20,45 +20,42 @@ You must assess the user request and choose ONE of the following modes immediate
 **MODE A: TOOL EXECUTION (Prioritize this for functionality)**
 - **Trigger Condition:** If the request requires data fetching, file manipulation, calculation, or any action supported by your tools.
 - **Behavior:** **BE SILENT AND ACT.** Do NOT explain what you are going to do. Do NOT say "I will check that for you."
-- **Output:** Start immediately with the trigger signal "{trigger_signal}", followed by the XML block.
-- **Constraint:** The XML must be the **ONLY** content of your response. Correctness is paramount.
+- **Output:** Start immediately with the tool call block using the exact delimiters provided.
+- **Constraint:** The tool call block must be the **ONLY** content of your response if you enter this mode. Correctness is paramount.
 **MODE B: CONVERSATION (Only when tools are useless)**
 - **Trigger Condition:** If the user is greeting, asking for general advice, or asking a question that tools cannot solve.
 - **Behavior:** Respond naturally and helpfully in plain text.
-- **Constraint:** Do NOT output any trigger signals or XML tags in this mode.
+- **Constraint:** Do NOT output any tool call delimiters or formatting in this mode.
 
-### 3. Strict Tool Implementation Rules
-If you enter **MODE A**, you must adhere to these technical rules:
-	
-When you decide to call a tool, you MUST output EXACTLY this trigger signal: {trigger_signal}
-The trigger signal MUST be output on a completely empty line by itself before any tool calls.
-Do NOT add any other text, spaces, or characters before or after {trigger_signal} on that line.
-You may provide explanations or reasoning before outputting {trigger_signal}", but once you decide to make a tool call, {trigger_signal} must come first.
-You MUST output the trigger signal {trigger_signal} ONLY ONCE per response. Never output multiple trigger signals in a single response.
+### 3. How to call tools
+When you need to call a tool, you MUST use this EXACT format at the END of your response:
 
-After outputting the trigger signal, immediately provide your tool calls enclosed in <invoke> XML tags.
-    
-4.  **XML Structure:**
-Your tool calls must be structured EXACTLY as follows. This is the ONLY format you can use, and any deviation will result in failure.
-    	
-    <antml:format>
-    {trigger_signal}
-    <invoke name="$TOOL_NAME">
-    <parameter name="$PARAM_NAME">$VALUE_OR_JSON_STRING</parameter>
-    </invoke>
-    </antml:format>
-    
-5.  IMPORTANT RULES:
-  - You may provide explanations or reasoning before deciding to call a tool.
-  - Once you decide to call a tool, you must first output the trigger signal {trigger_signal} on a separate line by itself.
-  - The trigger signal may only appear once per response and must not be repeated.
-  - Tool calls must use the exact XML format below: immediately after the trigger signal, use <invoke> and <parameter> tags.
-  - No additional text may be added after the closing </invoke> tag.
-  - Parameters must retain punctuation (including hyphen prefixes) exactly as defined.
-  - Encode arrays and objects in JSON before placing inside <parameter>.
-  - Be concise when not using tools.
-  - After invoking the tool,  you will receive the result of the tool call. Therefore,  please wait until you obtain the result from one tool call before invoking the next one 
-  `;
+{TC_START}
+{NAME_START}function_name{NAME_END}
+{ARGS_START}{"param": "value"}{ARGS_END}
+{TC_END}
+
+### 4. Strict Tool Implementation Rules
+1. Tool calls MUST be at the END of your response.
+2. Copy the delimiters EXACTLY as shown below.
+3. Arguments must be valid JSON.
+4. One tool per block.
+5. You may provide explanations or reasoning BEFORE the tool call block.
+6. Once the tool call block ({TC_START}) starts, no other text may be added until the closing delimiter ({TC_END}).
+7. After the closing delimiter ({TC_END}), NO additional text may be added.
+8. Parameters must retain punctuation (including hyphen prefixes) exactly as defined.
+9. Encode arrays and objects in JSON before placing inside parameters.
+10. Be concise when not using tools.
+11. After invoking the tool, you will receive the result of the tool call. Wait until you obtain the result from one tool call before invoking the next one.
+
+### 5. Delimiters to use for this session:
+- TC_START: {TC_START}
+- TC_END: {TC_END}
+- NAME_START: {NAME_START}
+- NAME_END: {NAME_END}
+- ARGS_START: {ARGS_START}
+- ARGS_END: {ARGS_END}
+`;
 
 // 思考模式相关的常量定义
 const THINKING_START_TAG = "<thinking>";
@@ -113,14 +110,13 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
  */
 function normalizeBlocks(
   content: string | ClaudeContentBlock[],
-  triggerSignal: string,
+  delimiter: ToolCallDelimiter,
 ): ClaudeContentBlock[] {
+  const m = delimiter.getMarkers();
   if (typeof content === "string") {
     return [{
       type: "text",
-      text: content
-        .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
-        .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, ""),
+      text: content,
     }];
   }
 
@@ -130,9 +126,7 @@ function normalizeBlocks(
     if (block.type === "text") {
       result.push({
         type: "text",
-        text: block.text
-          .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
-          .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, ""),
+        text: block.text,
       });
     } else if (block.type === "image") {
       result.push(block);
@@ -155,18 +149,13 @@ function normalizeBlocks(
       }
       result.push({
         type: "text",
-        text: `[工具调用结果 - ID: ${block.tool_use_id}]\n${toolResult}`,
+        text: `${m.RESULT_START}[ID: ${block.tool_use_id}]\n${toolResult}${m.RESULT_END}`,
       });
     } else if (block.type === "tool_use") {
-      const params = Object.entries(block.input ?? {})
-        .map(([key, value]) => {
-          const stringValue = typeof value === "string" ? value : JSON.stringify(value);
-          return `<parameter name="${key}">${stringValue}</parameter>`;
-        })
-        .join("\n");
+      const args = JSON.stringify(block.input ?? {});
       result.push({
         type: "text",
-        text: `${triggerSignal}\n<invoke name="${block.name}">\n${params}\n</invoke>`,
+        text: `${m.TC_START}\n${m.NAME_START}${block.name}${m.NAME_END}\n${m.ARGS_START}${args}${m.ARGS_END}\n${m.TC_END}`,
       });
     }
   }
@@ -176,7 +165,7 @@ function normalizeBlocks(
 
 export interface EnrichedClaudeRequest {
   request: ClaudeRequest;
-  triggerSignal?: string;
+  delimiter?: ToolCallDelimiter;
 }
 
 /**
@@ -185,16 +174,20 @@ export interface EnrichedClaudeRequest {
 export function enrichClaudeRequest(request: ClaudeRequest): EnrichedClaudeRequest {
   const tools = request.tools ?? [];
   if (!tools.length) {
-    // 即使没有工具，我们也可能需要处理历史消息中的文本过滤（防注入）
-    // 但为了保持原样，如果没工具就直接返回，历史消息中的 tool_use 理论上不该存在
     return { request };
   }
 
-  const signal = randomTriggerSignal();
+  const delimiter = new ToolCallDelimiter();
+  const markers = delimiter.getMarkers();
   const toolsXml = buildToolsXml(tools);
-  const template = DEFAULT_TEMPLATE
-    .replaceAll("{trigger_signal}", signal)
+  
+  let template = DEFAULT_TEMPLATE
     .replace("{tools_list}", toolsXml);
+
+  // 替换所有标记占位符
+  for (const [key, value] of Object.entries(markers)) {
+    template = template.replaceAll(`{${key}}`, String(value));
+  }
 
   // 1. 处理 System Prompt
   let systemContent = "";
@@ -210,7 +203,7 @@ export function enrichClaudeRequest(request: ClaudeRequest): EnrichedClaudeReque
   // 2. 处理 Messages
   const enrichedMessages = request.messages.map((msg) => ({
     ...msg,
-    content: normalizeBlocks(msg.content, signal),
+    content: normalizeBlocks(msg.content, delimiter),
   }));
 
   // 3. 构造新请求（清空 tools，注入 system）
@@ -221,5 +214,6 @@ export function enrichClaudeRequest(request: ClaudeRequest): EnrichedClaudeReque
     tools: undefined, // 清空上游工具定义，因为我们要模拟
   };
 
-  return { request: enrichedRequest, triggerSignal: signal };
+  return { request: enrichedRequest, delimiter };
 }
+

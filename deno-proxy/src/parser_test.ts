@@ -1,84 +1,119 @@
+import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { ToolifyParser } from "./parser.ts";
+import { ToolCallDelimiter } from "./signals.ts";
 
-function feed(parser: ToolifyParser, text: string) {
-  for (const char of text) {
+Deno.test("ToolifyParser - XML format (old) should be treated as text", () => {
+  const delimiter = new ToolCallDelimiter();
+  const parser = new ToolifyParser(delimiter);
+  
+  const input = `<invoke name="test"><parameter name="a">1</parameter></invoke>`;
+  for (const char of input) {
     parser.feedChar(char);
   }
-}
-
-Deno.test("ToolifyParser emits text and tool_call events", () => {
-  // thinkingEnabled 对仅工具解析的场景无影响
-  const parser = new ToolifyParser("<<CALL_aa11>>", false);
-  const input =
-    `Thoughts...<<CALL_aa11>>\n<invoke name="get_weather">\n<parameter name="city">"New York"</parameter>\n<parameter name="unit">"c"</parameter>\n</invoke>\n`;
-  feed(parser, input);
   parser.finish();
+  
   const events = parser.consumeEvents();
-
-  const textEvent = events.find((e) => e.type === "text");
-  if (!textEvent || textEvent.type !== "text") {
-    throw new Error("Expected text event");
-  }
-  if (!textEvent.content.includes("Thoughts")) {
-    throw new Error("Text event missing content");
-  }
-
-  const toolEvent = events.find((e) => e.type === "tool_call");
-  if (!toolEvent || toolEvent.type !== "tool_call") {
-    throw new Error("Expected tool call event");
-  }
-  if (toolEvent.call.name !== "get_weather") {
-    throw new Error("Tool call name mismatch");
-  }
-  if (toolEvent.call.arguments.city !== "New York") {
-    throw new Error("Tool arguments not parsed");
-  }
+  assertEquals(events[0].type, "text");
+  assertEquals(events[0].content, input);
 });
 
-Deno.test("ToolifyParser parses thinking blocks when no triggerSignal and thinking enabled", () => {
-  // 无 triggerSignal 且显式开启思考解析：解析 <thinking> 为 thinking 事件
-  const parser = new ToolifyParser(undefined, true);
-  const input = "Intro text<thinking> internal chain-of-thought </thinking>Outro";
-  feed(parser, input);
+Deno.test("ToolifyParser - New Delimiter format - Basic Tool Call", () => {
+  const delimiter = new ToolCallDelimiter();
+  const m = delimiter.getMarkers();
+  const parser = new ToolifyParser(delimiter);
+  
+  const toolCall = `${m.TC_START}\n${m.NAME_START}get_weather${m.NAME_END}\n${m.ARGS_START}{"city": "London"}${m.ARGS_END}\n${m.TC_END}`;
+  const input = `I will check the weather.\n${toolCall}`;
+  
+  for (const char of input) {
+    parser.feedChar(char);
+  }
   parser.finish();
+  
   const events = parser.consumeEvents();
-
-  const textEvents = events.filter((e) => e.type === "text") as { type: "text"; content: string }[];
-  const thinkingEvents = events.filter((e) => e.type === "thinking") as { type: "thinking"; content: string }[];
-
-  if (thinkingEvents.length !== 1) {
-    throw new Error(`Expected exactly one thinking event, got ${thinkingEvents.length}`);
-  }
-  const thinking = thinkingEvents[0].content;
-  if (!thinking.includes("internal chain-of-thought")) {
-    throw new Error(`Thinking content not parsed correctly: ${thinking}`);
-  }
-
-  if (!textEvents.length) {
-    throw new Error("Expected at least one text event");
-  }
-  const combinedText = textEvents.map((e) => e.content).join("");
-  if (!combinedText.includes("Intro text") || !combinedText.includes("Outro")) {
-    throw new Error(`Text events missing expected text content: ${combinedText}`);
-  }
+  
+  // 预期：一段文本 + 一个工具调用
+  assertEquals(events[0].type, "text");
+  assertEquals(events[0].content.trim(), "I will check the weather.");
+  
+  assertEquals(events[1].type, "tool_call");
+  assertEquals(events[1].call.name, "get_weather");
+  assertEquals(events[1].call.arguments, { city: "London" });
 });
 
-Deno.test("ToolifyParser treats thinking tags as text when thinking disabled", () => {
-  // 未开启思考解析时，即使出现 <thinking> 标签也应该作为普通文本处理
-  const parser = new ToolifyParser(undefined, false);
-  const input = "Intro <thinking>hidden</thinking> Outro";
-  feed(parser, input);
+Deno.test("ToolifyParser - Partial marker matching", () => {
+  const delimiter = new ToolCallDelimiter();
+  const m = delimiter.getMarkers();
+  const parser = new ToolifyParser(delimiter);
+  
+  // 模拟流式输入，在标记中间断开
+  const part1 = "Hello! " + m.TC_START.slice(0, 2);
+  const part2 = m.TC_START.slice(2) + `\n${m.NAME_START}test${m.NAME_END}\n${m.ARGS_START}{}${m.ARGS_END}\n${m.TC_END}`;
+  
+  for (const char of part1) {
+    parser.feedChar(char);
+  }
+  // 此时 part1 末尾的标记前缀应该被缓冲在 pendingText 中，不应该发出
+  let events = parser.consumeEvents();
+  assertEquals(events.length, 1);
+  assertEquals(events[0].content, "Hello! ");
+  
+  for (const char of part2) {
+    parser.feedChar(char);
+  }
   parser.finish();
+  
+  events = parser.consumeEvents();
+  assertEquals(events[0].type, "tool_call");
+  assertEquals(events[0].call.name, "test");
+});
+
+Deno.test("ToolifyParser - Thinking + Tool Call", () => {
+  const delimiter = new ToolCallDelimiter();
+  const m = delimiter.getMarkers();
+  const parser = new ToolifyParser(delimiter, true); // 开启 thinking
+  
+  const input = `<thinking>I need to use a tool</thinking>\n${m.TC_START}\n${m.NAME_START}tool${m.NAME_END}\n${m.ARGS_START}{}${m.ARGS_END}\n${m.TC_END}`;
+  
+  for (const char of input) {
+    parser.feedChar(char);
+  }
+  parser.finish();
+  
   const events = parser.consumeEvents();
+  assertEquals(events[0].type, "thinking");
+  assertEquals(events[0].content, "I need to use a tool");
+  assertEquals(events[1].type, "text"); // 换行符
+  assertEquals(events[2].type, "tool_call");
+});
 
-  const thinkingEvents = events.filter((e) => e.type === "thinking");
-  if (thinkingEvents.length !== 0) {
-    throw new Error(`Expected no thinking events when thinking disabled, got ${thinkingEvents.length}`);
-  }
+Deno.test("ToolifyParser - Native reasoning_content support", () => {
+  const delimiter = new ToolCallDelimiter();
+  const parser = new ToolifyParser(delimiter);
+  
+  parser.feedReasoning("Native thinking process");
+  const events = parser.consumeEvents();
+  
+  assertEquals(events.length, 1);
+  assertEquals(events[0].type, "thinking");
+  assertEquals(events[0].content, "Native thinking process");
+});
 
-  const textEvents = events.filter((e) => e.type === "text") as { type: "text"; content: string }[];
-  const combinedText = textEvents.map((e) => e.content).join("");
-  if (!combinedText.includes("<thinking>hidden</thinking>")) {
-    throw new Error(`Expected thinking tags to be preserved as text, got: ${combinedText}`);
+
+Deno.test("ToolifyParser - Invalid JSON arguments", () => {
+  const delimiter = new ToolCallDelimiter();
+  const m = delimiter.getMarkers();
+  const parser = new ToolifyParser(delimiter);
+  
+  const input = `${m.TC_START}\n${m.NAME_START}test${m.NAME_END}\n${m.ARGS_START}{invalid-json}${m.ARGS_END}\n${m.TC_END}`;
+  
+  for (const char of input) {
+    parser.feedChar(char);
   }
+  parser.finish();
+  
+  const events = parser.consumeEvents();
+  // 解析失败应回退为文本
+  assertEquals(events[0].type, "text");
+  assertEquals(events[0].content, input);
 });

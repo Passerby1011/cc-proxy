@@ -9,6 +9,7 @@ import { handleAnthropicStream } from "./handle_anthropic_stream.ts";
 import { countTokensWithTiktoken } from "./tiktoken.ts";
 import { ToolifyParser } from "./parser.ts";
 import { countTokensLocally } from "./token_counter.ts";
+import { ToolCallDelimiter } from "./signals.ts";
 
 export async function forwardRequest(
   request: ClaudeRequest,
@@ -67,11 +68,11 @@ export async function forwardRequest(
   }
 
   // 2. 增强请求（注入工具、处理 Tool Blocks）
-  const { request: enrichedRequest, triggerSignal } = enrichClaudeRequest(request);
+  const { request: enrichedRequest, delimiter } = enrichClaudeRequest(request);
   
-  if (triggerSignal && request.tools && request.tools.length > 0) {
+  if (delimiter && request.tools && request.tools.length > 0) {
     logPhase(requestId, LogPhase.ENRICHED, `Injected ${request.tools.length} tools`, {
-      signal: triggerSignal.slice(0, 15) + "...",
+      delimiter: delimiter.getMarkers().TC_START,
     });
   }
 
@@ -144,7 +145,7 @@ export async function forwardRequest(
         writer,
         config,
         requestId,
-        triggerSignal,
+        delimiter,
         thinkingEnabled,
         inputTokens,
         request.model, // 传入原始模型名
@@ -156,7 +157,7 @@ export async function forwardRequest(
         writer,
         config,
         requestId,
-        triggerSignal,
+        delimiter,
         thinkingEnabled,
         inputTokens,
         request.model, // 传入原始模型名
@@ -168,11 +169,20 @@ export async function forwardRequest(
     const json = await response.json();
     if (protocol === "openai") {
       // 将 OpenAI 非流式响应转换为 Claude 格式
-      const rawContent = json.choices?.[0]?.message?.content ?? "";
-      const parser = new ToolifyParser(triggerSignal, thinkingEnabled);
+      const message = json.choices?.[0]?.message;
+      const rawContent = message?.content ?? "";
+      const reasoningContent = message?.reasoning_content ?? "";
+      const parser = new ToolifyParser(delimiter, thinkingEnabled);
+
+      // 优先处理原生推理内容
+      if (reasoningContent) {
+        parser.feedReasoning(reasoningContent);
+      }
+
       for (const char of rawContent) {
         parser.feedChar(char);
       }
+
       parser.finish();
       const events = parser.consumeEvents();
 

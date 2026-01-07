@@ -6,16 +6,17 @@ import { ToolCallDelimiter } from "./signals.ts";
 const THINKING_START_TAG = "<thinking>";
 const THINKING_END_TAG = "</thinking>";
 
+type ParserState = "TEXT" | "THINKING" | "TOOL";
+
 export class ToolifyParser {
   private readonly delimiter?: ToolCallDelimiter;
-  // 是否开启思考解析，由上游请求的 thinking 配置决定
   private readonly thinkingEnabled: boolean;
-  private buffer = "";
-  private toolBuffer = "";
-  private pendingText = "";
-  private bufferingTool = false;
-  private thinkingMode = false;
+  
+  private state: ParserState = "TEXT";
+  private buffer = ""; // 通用缓冲区
   private thinkingBuffer = "";
+  private toolBuffer = "";
+  
   private readonly events: ParserEvent[] = [];
   private readonly requestId?: string;
 
@@ -32,91 +33,138 @@ export class ToolifyParser {
   }
 
   feedChar(char: string) {
-    // 当没有配置工具协议时，仅处理 thinking 块
-    if (!this.delimiter) {
-      this.handleCharWithoutTrigger(char);
-      return;
-    }
+    this.buffer += char;
+    this.processBuffer();
+  }
 
-    const m = this.delimiter.getMarkers();
+  private processBuffer() {
+    const m = this.delimiter?.getMarkers();
 
-    // 1. 处理思考模式
-    if (this.thinkingEnabled) {
-      this.checkThinkingMode(char);
-      if (this.thinkingMode) {
-        this.thinkingBuffer += char;
-        this.checkThinkingEnd();
-        return;
+    if (this.state === "THINKING") {
+      // 思考模式中：只寻找结束标签
+      if (this.buffer.includes(THINKING_END_TAG)) {
+        const idx = this.buffer.indexOf(THINKING_END_TAG);
+        this.thinkingBuffer += this.buffer.slice(0, idx);
+        
+        // 发出思考事件
+        let content = this.thinkingBuffer.replace(/^\s*>\s*/, "");
+        if (content) {
+          this.events.push({ type: "thinking", content });
+        }
+        
+        // 切换回文本模式
+        this.thinkingBuffer = "";
+        this.state = "TEXT";
+        // 剩余部分重新处理
+        const remaining = this.buffer.slice(idx + THINKING_END_TAG.length);
+        this.buffer = "";
+        if (remaining) {
+          this.feedChar(""); // 触发递归处理，但其实直接赋值 buffer 更安全
+          this.buffer = remaining;
+          this.processBuffer();
+        }
       }
-    }
-
-    // 2. 处理工具调用块缓冲
-    if (this.bufferingTool) {
-      this.toolBuffer += char;
-      // 可以在这里提前检测 TC_END 以优化
+      // 如果没找到结束标签，buffer 继续增长
       return;
     }
 
-    // 3. 正常内容，检测 TC_START
-    this.pendingText += char;
-    const combined = this.pendingText;
+    if (this.state === "TOOL") {
+      // 工具模式中：寻找结束标记
+      if (m && this.buffer.includes(m.TC_END)) {
+        const idx = this.buffer.indexOf(m.TC_END) + m.TC_END.length;
+        this.toolBuffer += this.buffer.slice(0, idx);
+        
+        this.parseAndEmitToolCall();
+        
+        this.state = "TEXT";
+        const remaining = this.buffer.slice(idx);
+        this.buffer = "";
+        if (remaining) {
+          this.buffer = remaining;
+          this.processBuffer();
+        }
+      }
+      return;
+    }
 
-    if (combined.includes(m.TC_START)) {
-      const idx = combined.indexOf(m.TC_START);
-      // 发出 TC_START 之前的文本
-      const textBefore = combined.slice(0, idx);
+    // TEXT 状态：寻找思考开始或工具开始
+    
+    // 1. 优先检测思考开始 (如果启用)
+    if (this.thinkingEnabled && this.buffer.includes(THINKING_START_TAG)) {
+      const idx = this.buffer.indexOf(THINKING_START_TAG);
+      const textBefore = this.buffer.slice(0, idx);
       if (textBefore) {
         this.events.push({ type: "text", content: textBefore });
       }
       
-      // 开始缓冲工具调用，包含 TC_START
-      this.bufferingTool = true;
-      this.toolBuffer = combined.slice(idx);
-      this.pendingText = "";
-      
-      log("debug", "Detected tool call start marker", {
-        marker: m.TC_START,
-        requestId: this.requestId
-      });
+      this.state = "THINKING";
+      this.thinkingBuffer = "";
+      const remaining = this.buffer.slice(idx + THINKING_START_TAG.length);
+      this.buffer = "";
+      if (remaining) {
+        this.buffer = remaining;
+        this.processBuffer();
+      }
       return;
     }
 
-    // 4. 防止 pendingText 无限增长，同时保留可能的标记前缀
-    const safeEnd = this.findPartialMatchEndIndex(combined, m.TC_START);
-    if (safeEnd > 0) {
-      const safeText = combined.slice(0, safeEnd);
+    // 2. 检测工具调用开始
+    if (m && this.buffer.includes(m.TC_START)) {
+      const idx = this.buffer.indexOf(m.TC_START);
+      const textBefore = this.buffer.slice(0, idx);
+      if (textBefore) {
+        this.events.push({ type: "text", content: textBefore });
+      }
+      
+      this.state = "TOOL";
+      this.toolBuffer = ""; // TC_START 留在 buffer 里交给 TOOL 状态处理
+      const remaining = this.buffer.slice(idx);
+      this.buffer = "";
+      if (remaining) {
+        this.buffer = remaining;
+        this.processBuffer();
+      }
+      return;
+    }
+
+    // 3. 保护逻辑：如果 buffer 太长且没有发现任何标记，刷出部分文本
+    // 但要保留可能成为标记一部分的后缀
+    const maxMarkerLen = Math.max(
+      THINKING_START_TAG.length,
+      m?.TC_START.length || 0
+    );
+    
+    if (this.buffer.length > 512) {
+      const safeLen = this.buffer.length - maxMarkerLen;
+      const safeText = this.buffer.slice(0, safeLen);
       this.events.push({ type: "text", content: safeText });
-      this.pendingText = combined.slice(safeEnd);
+      this.buffer = this.buffer.slice(safeLen);
     }
   }
 
   finish() {
-    // 1. 处理未完成的思考块
-    if (this.thinkingEnabled && this.thinkingMode && this.thinkingBuffer) {
-      let thinkingContent = this.thinkingBuffer;
-      thinkingContent = thinkingContent.replace(/^\s*>\s*/, "");
-      this.events.push({ type: "thinking", content: thinkingContent });
-    }
-
-    // 2. 处理缓冲中的工具调用
-    if (this.bufferingTool && this.toolBuffer) {
+    if (this.state === "THINKING") {
+      let content = this.thinkingBuffer + this.buffer;
+      content = content.replace(/^\s*>\s*/, "");
+      if (content) {
+        this.events.push({ type: "thinking", content });
+      }
+    } else if (this.state === "TOOL") {
+      this.toolBuffer += this.buffer;
       this.parseAndEmitToolCall();
-    }
-
-    // 3. 发出剩余的 pending 文本
-    if (this.pendingText) {
-      this.events.push({ type: "text", content: this.pendingText });
+    } else {
+      if (this.buffer) {
+        this.events.push({ type: "text", content: this.buffer });
+      }
     }
 
     this.events.push({ type: "end" });
     
-    // 重置状态
+    // 重置
+    this.state = "TEXT";
     this.buffer = "";
-    this.toolBuffer = "";
-    this.pendingText = "";
-    this.bufferingTool = false;
     this.thinkingBuffer = "";
-    this.thinkingMode = false;
+    this.toolBuffer = "";
   }
 
   consumeEvents(): ParserEvent[] {
@@ -128,7 +176,6 @@ export class ToolifyParser {
     const m = this.delimiter.getMarkers();
     const content = this.toolBuffer;
 
-    // 转义正则表达式中的特殊字符
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     const regex = new RegExp(
@@ -142,7 +189,6 @@ export class ToolifyParser {
     let found = false;
     let match: RegExpExecArray | null;
     
-    // 我们只处理第一个匹配项（按照现有逻辑）
     if ((match = regex.exec(content)) !== null) {
       const name = match[1].trim();
       const argsStr = match[2].trim();
@@ -168,14 +214,11 @@ export class ToolifyParser {
     }
 
     if (!found) {
-      // 如果没有解析出有效的工具调用，将缓冲内容作为普通文本发出
-      // 或者如果标记不完整，也原样发出
       log("debug", "No valid tool call found in buffer, emitting as text", {
         bufferPreview: content.slice(0, 200)
       });
       this.events.push({ type: "text", content });
     } else {
-      // 如果解析成功，可能还需要检查工具调用块之后是否还有多余的内容
       const lastMatchEnd = regex.lastIndex;
       const remaining = content.slice(lastMatchEnd);
       if (remaining.trim()) {
@@ -184,78 +227,6 @@ export class ToolifyParser {
     }
     
     this.toolBuffer = "";
-    this.bufferingTool = false;
-  }
-
-  private findPartialMatchEndIndex(text: string, marker: string): number {
-    for (let i = marker.length - 1; i > 0; i--) {
-      if (text.endsWith(marker.slice(0, i))) {
-        return text.length - i;
-      }
-    }
-    return text.length;
-  }
-
-  private handleCharWithoutTrigger(char: string) {
-    if (!this.thinkingEnabled) {
-      this.buffer += char;
-      if (this.buffer.length >= 256) {
-        this.events.push({ type: "text", content: this.buffer });
-        this.buffer = "";
-      }
-      return;
-    }
-
-    if (this.thinkingMode) {
-      this.thinkingBuffer += char;
-      this.checkThinkingEnd();
-      return;
-    }
-
-    this.buffer += char;
-    this.checkThinkingModeInternal();
-  }
-
-  private checkThinkingModeInternal() {
-    if (this.buffer.endsWith(THINKING_START_TAG)) {
-      const textPortion = this.buffer.slice(0, -THINKING_START_TAG.length);
-      if (textPortion) {
-        this.events.push({ type: "text", content: textPortion });
-      }
-      this.buffer = "";
-      this.thinkingMode = true;
-      this.thinkingBuffer = "";
-    } else if (this.buffer.length >= 256) {
-      this.events.push({ type: "text", content: this.buffer });
-      this.buffer = "";
-    }
-  }
-
-  private checkThinkingMode(char: string) {
-    if (!this.thinkingMode) {
-      this.buffer += char;
-      if (this.buffer.endsWith(THINKING_START_TAG)) {
-        const textPortion = this.buffer.slice(0, -THINKING_START_TAG.length);
-        if (textPortion) {
-          this.events.push({ type: "text", content: textPortion });
-        }
-        this.buffer = "";
-        this.thinkingMode = true;
-        this.thinkingBuffer = "";
-      }
-    }
-  }
-
-  private checkThinkingEnd() {
-    if (this.thinkingBuffer.endsWith(THINKING_END_TAG)) {
-      let thinkingContent = this.thinkingBuffer.slice(0, -THINKING_END_TAG.length);
-      thinkingContent = thinkingContent.replace(/^\s*>\s*/, "");
-      if (thinkingContent) {
-        this.events.push({ type: "thinking", content: thinkingContent });
-      }
-      this.thinkingBuffer = "";
-      this.thinkingMode = false;
-      this.buffer = ""; // 重置正文 buffer，因为标签已经处理完
-    }
   }
 }
+

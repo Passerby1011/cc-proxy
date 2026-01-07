@@ -20,6 +20,35 @@ export class ToolifyParser {
   private readonly events: ParserEvent[] = [];
   private readonly requestId?: string;
 
+  private tryParseJson(str: string): any {
+    if (!str) return {};
+    try {
+      return JSON.parse(str);
+    } catch (_e) {
+      // 容错：尝试提取第一个 { 和最后一个 } 之间的内容
+      const firstBrace = str.indexOf("{");
+      const lastBrace = str.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        const candidate = str.slice(firstBrace, lastBrace + 1);
+        try {
+          return JSON.parse(candidate);
+        } catch (_e2) {
+          // 进一步容错：处理常见的 JSON 错误（简单版）
+          try {
+            // 替换未转义的换行符
+            const fixed = candidate
+              .replace(/\n/g, "\\n")
+              .replace(/\r/g, "\\r");
+            return JSON.parse(fixed);
+          } catch (_e3) {
+            return null;
+          }
+        }
+      }
+      return null;
+    }
+  }
+
   constructor(delimiter?: ToolCallDelimiter, thinkingEnabled = false, requestId?: string) {
     this.delimiter = delimiter;
     this.thinkingEnabled = thinkingEnabled;
@@ -178,44 +207,65 @@ export class ToolifyParser {
 
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+    // 更加宽松的正则表达式：允许在标记之间存在任意空白符（包括缩进）
     const regex = new RegExp(
-      `${esc(m.TC_START)}\\s*` +
-        `${esc(m.NAME_START)}([\\s\\S]*?)${esc(m.NAME_END)}\\s*` +
-        `${esc(m.ARGS_START)}([\\s\\S]*?)${esc(m.ARGS_END)}\\s*` +
+      `${esc(m.TC_START)}[\\s\\S]*?` +
+        `${esc(m.NAME_START)}\\s*([\\s\\S]*?)\\s*${esc(m.NAME_END)}[\\s\\S]*?` +
+        `${esc(m.ARGS_START)}\\s*([\\s\\S]*?)\\s*${esc(m.ARGS_END)}[\\s\\S]*?` +
         `${esc(m.TC_END)}`,
       "g"
     );
 
     let found = false;
     let match: RegExpExecArray | null;
-    
-    if ((match = regex.exec(content)) !== null) {
-      const name = match[1].trim();
-      const argsStr = match[2].trim();
+    let name = "";
+    let argsStr = "";
 
-      try {
-        const args = JSON.parse(argsStr);
+    // 1. 尝试正则匹配
+    if ((match = regex.exec(content)) !== null) {
+      name = match[1].trim();
+      argsStr = match[2].trim();
+    } else {
+      // 2. 如果正则匹配失败，尝试基于关键标记定位的“模糊匹配”
+      const nStart = content.indexOf(m.NAME_START);
+      const nEnd = content.indexOf(m.NAME_END, nStart + m.NAME_START.length);
+      const aStart = content.indexOf(m.ARGS_START, nEnd + m.NAME_END.length);
+      const aEnd = content.indexOf(m.ARGS_END, aStart + m.ARGS_START.length);
+
+      if (nStart !== -1 && nEnd !== -1 && aStart !== -1 && aEnd !== -1) {
+        name = content.slice(nStart + m.NAME_START.length, nEnd).trim();
+        argsStr = content.slice(aStart + m.ARGS_START.length, aEnd).trim();
+        log("debug", "Regex failed, but fuzzy marker matching succeeded", { name, requestId: this.requestId });
+      }
+    }
+
+    if (name) {
+      // 尝试解析或修复 JSON
+      const args = this.tryParseJson(argsStr);
+      if (args !== null) {
         logPhase(this.requestId || "unknown", LogPhase.TOOL, `${name}()`, {
-          args: argsStr.slice(0, 100) + (argsStr.length > 100 ? "..." : "")
+          args: argsStr.slice(0, 100) + (argsStr.length > 100 ? "..." : ""),
         });
-        
+
         this.events.push({
           type: "tool_call",
-          call: { name, arguments: args }
+          call: { name, arguments: args },
         });
         found = true;
-      } catch (e) {
-        log("warn", "Failed to parse tool call arguments", {
-          error: String(e),
+      } else {
+        log("warn", "Failed to parse tool call arguments even after repair", {
           name,
-          argsStr: argsStr.slice(0, 500)
+          argsStr: argsStr.slice(0, 1000),
+          requestId: this.requestId,
         });
       }
     }
 
     if (!found) {
-      log("debug", "No valid tool call found in buffer, emitting as text", {
-        bufferPreview: content.slice(0, 200)
+      log("warn", "No valid tool call found in tool buffer, falling back to text", {
+        requestId: this.requestId,
+        bufferSize: content.length,
+        bufferPreview: content.slice(0, 1000),
       });
       this.events.push({ type: "text", content });
     } else {

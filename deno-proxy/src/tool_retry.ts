@@ -106,6 +106,7 @@ export class ToolCallRetryHandler {
       const decoder = new TextDecoder();
       let buffer = "";
       let fullContent = "";
+      let eventType = ""; // 🔑 记录当前事件类型
 
       try {
         while (true) {
@@ -136,14 +137,15 @@ export class ToolCallRetryHandler {
                 // 忽略解析错误
               }
             } else {
-              // Anthropic SSE 格式
+              // Anthropic SSE 格式 - 🔑 修复：正确处理事件类型
               if (trimmed.startsWith("event: ")) {
-                // 记录事件类型（如需要）
+                eventType = trimmed.slice(7); // 记录事件类型
               } else if (trimmed.startsWith("data: ")) {
                 const jsonStr = trimmed.slice(6);
                 try {
                   const data = JSON.parse(jsonStr);
-                  if (data.delta?.type === "text_delta") {
+                  // 🔑 根据事件类型解析内容
+                  if (eventType === "content_block_delta" && data.delta?.type === "text_delta") {
                     fullContent += data.delta.text || "";
                   }
                 } catch (e) {

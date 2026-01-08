@@ -149,6 +149,10 @@ export async function forwardRequest(
         thinkingEnabled,
         inputTokens,
         request.model, // 传入原始模型名
+        enrichedRequest.messages, // 🔑 传递原始消息用于重试
+        finalUrl, // 🔑 传递上游 URL
+        headers, // 🔑 传递请求头
+        protocol, // 🔑 传递协议类型
       );
       return { inputTokens, outputTokens: result?.outputTokens };
     } else {
@@ -161,6 +165,10 @@ export async function forwardRequest(
         thinkingEnabled,
         inputTokens,
         request.model, // 传入原始模型名
+        enrichedRequest.messages, // 🔑 传递原始消息用于重试
+        finalUrl, // 🔑 传递上游 URL
+        headers, // 🔑 传递请求头
+        protocol, // 🔑 传递协议类型
       );
       return { inputTokens, outputTokens: result?.outputTokens };
     }

@@ -294,5 +294,10 @@ export const handler = async (req: Request) => {
 
 if (import.meta.main) {
   const config = getConfig();
+  
+  // 启动时输出关键配置信息
+  const { logConfigInfo } = await import("./logging.ts");
+  logConfigInfo(config as unknown as Record<string, unknown>, "🚀 服务启动配置");
+  
   serve(handler, config.autoPort ? undefined : { hostname: config.host, port: config.port });
 }

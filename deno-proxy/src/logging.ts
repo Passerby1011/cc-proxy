@@ -254,7 +254,7 @@ export function log(
   meta?: Record<string, unknown>,
   phase?: typeof LogPhase[keyof typeof LogPhase]
 ) {
-  // 如果日志被禁用，直接返回
+  // 如果日志被禁用,直接返回
   if (LOGGING_DISABLED) return;
   
   if (levelOrder[level] < levelOrder[configuredLevel]) return;
@@ -270,6 +270,63 @@ export function log(
     default:
       prettyLog(level, message, meta, phase);
       break;
+  }
+}
+
+// 配置日志输出 - 隐藏敏感信息
+export function logConfigInfo(config: Record<string, unknown>, title: string) {
+  if (LOGGING_DISABLED || levelOrder.info < levelOrder[configuredLevel]) return;
+  
+  // 需要完全隐藏的敏感字段（只显示是否配置）
+  const sensitiveFields = ['apiKey', 'clientApiKey', 'adminApiKey', 'pgStoreDsn', 'upstreamApiKey', 'baseUrl', 'upstreamBaseUrl'];
+  
+  const safeConfig: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (sensitiveFields.some(field => key.toLowerCase().includes(field.toLowerCase()))) {
+      // 敏感字段只显示是否已配置
+      if (typeof value === 'string' && value.length > 0) {
+        safeConfig[key] = '✓ 已配置';
+      } else if (value) {
+        safeConfig[key] = '✓ 已配置';
+      } else {
+        safeConfig[key] = '✗ 未配置';
+      }
+    } else if (key === 'channelConfigs' && Array.isArray(value)) {
+      // 特殊处理渠道配置
+      safeConfig[key] = value.map((ch: any) => ({
+        name: ch.name,
+        protocol: ch.protocol,
+        baseUrl: ch.baseUrl ? '✓ 已配置' : '✗ 未配置',
+        apiKey: ch.apiKey ? '✓ 已配置' : '✗ 未配置',
+      }));
+    } else if (key === 'toolCallRetry' && value && typeof value === 'object') {
+      // 保留工具重试配置
+      safeConfig[key] = value;
+    } else {
+      safeConfig[key] = value;
+    }
+  }
+  
+  if (LOG_FORMAT === "pretty") {
+    console.log("");
+    console.log(colorize("┌" + "─".repeat(70), colors.gray));
+    console.log(colorize("│", colors.gray) + ` ${colorize("⚙️  [CONFIG]", colors.cyan)} ${colorize(title, colors.white)}`);
+    console.log(colorize("├" + "─".repeat(70), colors.gray));
+    
+    for (const [key, value] of Object.entries(safeConfig)) {
+      let displayValue: string;
+      if (typeof value === 'object' && value !== null) {
+        displayValue = JSON.stringify(value, null, 2).replace(/\n/g, '\n│    ');
+      } else {
+        displayValue = String(value);
+      }
+      console.log(colorize("│", colors.gray) + `  ${colorize(key, colors.yellow)}: ${colorize(displayValue, colors.white)}`);
+    }
+    
+    console.log(colorize("└" + "─".repeat(70), colors.gray));
+    console.log("");
+  } else {
+    log("info", title, safeConfig);
   }
 }
 

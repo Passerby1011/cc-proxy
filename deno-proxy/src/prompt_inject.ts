@@ -38,7 +38,7 @@ When you need to call a tool, you MUST use this EXACT format at the END of your 
 ### 4. Strict Tool Implementation Rules
 1. Tool calls MUST be at the END of your response.
 2. Copy the delimiters EXACTLY as shown below.
-3. Arguments must be valid JSON.
+3. **Arguments must be valid JSON (PERFECT SYNTAX IS MANDATORY)**
 4. One tool per block.
 5. You may provide explanations or reasoning BEFORE the tool call block.
 6. Once the tool call block ({TC_START}) starts, no other text may be added until the closing delimiter ({TC_END}).
@@ -47,6 +47,7 @@ When you need to call a tool, you MUST use this EXACT format at the END of your 
 9. Encode arrays and objects in JSON before placing inside parameters.
 10. Be concise when not using tools.
 11. After invoking the tool, you will receive the result of the tool call. Wait until you obtain the result from one tool call before invoking the next one.
+12. Special Conditions: If you plan to use editing tools to edit a **long text** in the future, please perform the editing in multiple commands, with each command not exceeding 2500 tokens.
 
 ### 5. Delimiters to use for this session:
 - TC_START: {TC_START}

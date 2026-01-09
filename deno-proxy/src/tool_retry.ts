@@ -1,17 +1,17 @@
 import { log, logPhase, LogPhase } from "./logging.ts";
 import { ToolCallDelimiter } from "./signals.ts";
-import { ParsedInvokeCall } from "./types.ts";
+import { ParsedInvokeCall, ClaudeRequest } from "./types.ts";
 import { ProxyConfig } from "./config.ts";
+import { ToolifyParser } from "./parser.ts";
 
 export class ToolCallRetryHandler {
   constructor(
     private config: ProxyConfig,
     private requestId: string,
-    private originalMessages: any[],
+    private originalRequest: ClaudeRequest,
     private upstreamUrl: string,
     private upstreamHeaders: Record<string, string>,
     private protocol: "openai" | "anthropic",
-    private model: string,  // 🔑 新增：使用原始请求的模型
   ) {}
 
   async retry(
@@ -49,13 +49,13 @@ export class ToolCallRetryHandler {
 
     // 🔑 构造重试请求（包含之前的完整输出）
     const retryMessages = [
-      ...this.originalMessages,
+      ...this.originalRequest.messages,
       {
-        role: "assistant",
+        role: "assistant" as const,
         content: priorText + failedContent  // 完整的失败输出
       },
       {
-        role: "user",
+        role: "user" as const,
         content: correctionPrompt
       }
     ];
@@ -237,14 +237,16 @@ export class ToolCallRetryHandler {
     // 默认模板
     return `Your previous tool call output was malformed and could not be parsed.
 
-${priorText ? `⚠️ IMPORTANT: You already outputted this text:
+${priorText ? 
+  `⚠️ IMPORTANT: You already outputted this text:
 ---
 ${priorText}
 ---
+**The above response is for reference only.**
 
-**DO NOT REPEAT THIS TEXT IN YOUR RESPONSE.**
+` : ''}
 
-` : ''}Please output **ONLY** the corrected tool call using the exact format below:
+Please output **ONLY** the corrected tool call using the exact format below:
 
 ${m.TC_START}
 ${m.NAME_START}function_name${m.NAME_END}
@@ -252,32 +254,44 @@ ${m.ARGS_START}{"param": "value"}${m.ARGS_END}
 ${m.TC_END}
 
 Critical requirements:
-1. Include ALL delimiters exactly as shown above
-2. Ensure JSON arguments are valid (no trailing commas, proper escaping)
-3. Do NOT include any text before or after the tool call block
+** Include ALL delimiters exactly as shown above **
+1. **Arguments must be valid JSON (PERFECT SYNTAX IS MANDATORY)**
+2. Include ALL delimiters exactly as shown above.
+3. Do NOT include any text before or after the tool call block.
 4. Start your response immediately with: ${m.TC_START}
-5. Do not repeat any previously outputted text
+5. Do not repeat any previously outputted text.
 
 Your response should contain ONLY the tool call block, nothing else.`;
   }
 
   private buildRequestBody(messages: any[]): any {
-    // 🔑 使用原始请求的模型和协议，改用流式
+    // 🔑 解析模型名：支持 "channel+model" 格式，重试时应使用实际模型名
+    const modelName = this.originalRequest.model;
+    const plusIndex = modelName.indexOf("+");
+    const actualModel = plusIndex !== -1 ? modelName.slice(plusIndex + 1) : modelName;
+
+    // 🔑 使用实际的模型和协议，改用流式
     if (this.protocol === "anthropic") {
       // Anthropic 格式
       return {
-        model: this.model,  // 使用传入的模型
-        max_tokens: 4096,
+        model: actualModel,
+        max_tokens: this.originalRequest.max_tokens || 4096,
         messages,
-        stream: true,  // 🔑 改用流式
+        stream: true,
+        system: this.originalRequest.system,
+        temperature: this.originalRequest.temperature,
+        top_p: this.originalRequest.top_p,
+        thinking: this.originalRequest.thinking,
       };
     } else {
       // OpenAI 格式
       return {
-        model: this.model,  // 使用传入的模型
+        model: actualModel,
         messages,
-        stream: true,  // 🔑 改用流式
-        max_tokens: 4096,
+        stream: true,
+        max_tokens: this.originalRequest.max_tokens || 4096,
+        temperature: this.originalRequest.temperature,
+        top_p: this.originalRequest.top_p,
       };
     }
   }
@@ -302,14 +316,20 @@ Your response should contain ONLY the tool call block, nothing else.`;
     if (match) {
       const name = match[1].trim();
       const argsStr = match[2].trim();
-      try {
-        const args = JSON.parse(argsStr);
+      
+      // 🔑 使用统一的 ToolifyParser 修复逻辑来解析重试结果
+      const parser = new ToolifyParser(delimiter, false, this.requestId);
+      // 利用 parser 内部的 tryParseJson (它是私有的，但我们可以通过这种方式间接复用逻辑，
+      // 或者干脆把 tryParseJson 改为静态方法/导出函数)
+      // 为保持最简改动，我们临时将 parser.ts 的 tryParseJson 改为 public
+      const args = (parser as any).tryParseJson(argsStr);
+      
+      if (args !== null) {
         return { name, arguments: args };
-      } catch (e) {
-        log("warn", "Failed to parse retry tool call JSON", {
+      } else {
+        log("warn", "Failed to parse retry tool call JSON even after repair", {
           requestId: this.requestId,
-          argsStr: argsStr.slice(0, 200),
-          error: String(e)
+          argsStr: argsStr.slice(0, 200)
         });
         return null;
       }

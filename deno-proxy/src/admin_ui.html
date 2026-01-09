@@ -703,7 +703,32 @@
                             CC-Proxy Dashboard
                         </a>
                         <div style="display: flex; gap: 12px; align-items: center">
-                            <button onClick=${() => fetchConfig()} disabled=${loading} title="从后端存储重新加载配置" style="padding: 8px 14px; font-size: 12px">
+                            <button onClick=${async () => {
+                                setMessage('正在同步...');
+                                setMsgType('');
+                                setLoading(true);
+                                try {
+                                    const res = await fetch('/admin/api/config/sync', {
+                                        method: 'POST',
+                                        headers: { 'Authorization': `Bearer ${apiKey}` }
+                                    });
+                                    const data = await res.json();
+                                    if (data.status === 'success') {
+                                        setConfig(data.config);
+                                        setMessage('配置已同步');
+                                        setMsgType('success');
+                                        setTimeout(() => setMessage('已连接'), 3000);
+                                    } else {
+                                        setMessage('同步失败: ' + (data.message || data.error));
+                                        setMsgType('error');
+                                    }
+                                } catch (e) {
+                                    setMessage('网络错误: ' + e.message);
+                                    setMsgType('error');
+                                } finally {
+                                    setLoading(false);
+                                }
+                            }} disabled=${loading} title="从后端存储重新加载配置" style="padding: 8px 14px; font-size: 12px">
                                 <${Icons.Refresh} /> 同步数据
                             </button>
                             <div class="status-badge">

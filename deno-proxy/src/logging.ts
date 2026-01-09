@@ -277,33 +277,57 @@ export function log(
 export function logConfigInfo(config: Record<string, unknown>, title: string) {
   if (LOGGING_DISABLED || levelOrder.info < levelOrder[configuredLevel]) return;
   
-  // 需要完全隐藏的敏感字段（只显示是否配置）
-  const sensitiveFields = ['apiKey', 'clientApiKey', 'adminApiKey', 'pgStoreDsn', 'upstreamApiKey', 'baseUrl', 'upstreamBaseUrl'];
+  // 完全过滤掉所有包含密钥和URL的敏感字段
+  const excludeFields = ['apiKey', 'clientApiKey', 'adminApiKey', 'pgStoreDsn', 'upstreamApiKey', 'baseUrl', 'upstreamBaseUrl', 'upstreamModelOverride', 'configFilePath'];
+  
+  // 字段名称映射（代码变量名 -> 中文显示名）
+  const fieldNameMap: Record<string, string> = {
+    'port': '服务端口',
+    'host': '绑定地址',
+    'requestTimeoutMs': '请求超时(ms)',
+    'aggregationIntervalMs': '聚合间隔(ms)',
+    'maxRequestsPerMinute': '频率限制(次/分钟)',
+    'tokenMultiplier': 'Token计费倍数',
+    'autoPort': '自动端口',
+    'passthroughApiKey': '透传客户端密钥',
+    'defaultProtocol': '默认协议',
+    'channelConfigs': '渠道配置',
+    'toolCallRetry': '工具重试配置',
+  };
   
   const safeConfig: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config)) {
-    if (sensitiveFields.some(field => key.toLowerCase().includes(field.toLowerCase()))) {
-      // 敏感字段只显示是否已配置
-      if (typeof value === 'string' && value.length > 0) {
-        safeConfig[key] = '✓ 已配置';
-      } else if (value) {
-        safeConfig[key] = '✓ 已配置';
-      } else {
-        safeConfig[key] = '✗ 未配置';
-      }
-    } else if (key === 'channelConfigs' && Array.isArray(value)) {
-      // 特殊处理渠道配置
-      safeConfig[key] = value.map((ch: any) => ({
-        name: ch.name,
-        protocol: ch.protocol,
-        baseUrl: ch.baseUrl ? '✓ 已配置' : '✗ 未配置',
-        apiKey: ch.apiKey ? '✓ 已配置' : '✗ 未配置',
+    // 完全跳过所有敏感字段，不显示
+    if (excludeFields.some(field => key.toLowerCase().includes(field.toLowerCase()))) {
+      continue;
+    }
+    
+    // 跳过未映射的字段（避免显示程序内部字段或无效配置）
+    if (!fieldNameMap[key]) {
+      continue;
+    }
+    
+    // 使用中文名称
+    const displayName = fieldNameMap[key];
+    
+    if (key === 'channelConfigs' && Array.isArray(value)) {
+      // 渠道配置只显示非敏感信息
+      safeConfig[displayName] = value.map((ch: any, idx: number) => ({
+        '序号': `#${idx + 1}`,
+        '渠道名': ch.name,
+        '协议': ch.protocol,
       }));
     } else if (key === 'toolCallRetry' && value && typeof value === 'object') {
-      // 保留工具重试配置
-      safeConfig[key] = value;
+      // 工具重试配置映射为中文
+      const retry = value as any;
+      safeConfig['工具重试配置'] = {
+        '启用': retry.enabled ? '是' : '否',
+        '最大重试次数': retry.maxRetries,
+        '超时(ms)': retry.timeout,
+        '保持连接': retry.keepAlive ? '是' : '否',
+      };
     } else {
-      safeConfig[key] = value;
+      safeConfig[displayName] = value;
     }
   }
   

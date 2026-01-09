@@ -21,32 +21,96 @@ export class ToolifyParser {
   private readonly events: ParserEvent[] = [];
   private readonly requestId?: string;
 
-  private tryParseJson(str: string): any {
+  /**
+   * 尝试修复模型生成的损坏 JSON
+   */
+  private repairJson(str: string): string {
+    let fixed = str.trim();
+
+    // 1. 处理明显的截断或前后杂质：提取第一个 { 和最后一个 } 之间的内容
+    const firstBrace = fixed.indexOf("{");
+    const lastBrace = fixed.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      fixed = fixed.slice(firstBrace, lastBrace + 1);
+    }
+
+    // 2. 移除末尾逗号 (Trailing Commas)
+    // 匹配: , 后面跟着紧随其后的 } 或 ]，中间允许有空白
+    fixed = fixed.replace(/,\s*([}\]])/g, "$1");
+
+    // 3. 处理字符串内部的非法换行符 (JSON 规范要求字符串内的换行必须转义为 \n)
+    // 这个正则寻找在双引号包裹的字符串内容中的真实换行符
+    // 逻辑：如果换行符出现在双引号之间，且前面的双引号不是被转义的
+    // 注意：这是一个简单启发式，处理不了极其复杂的嵌套，但能解决 90% 模型输出问题
+    fixed = fixed.replace(/(".*?[^\\]")|(\n)/g, (match, group1, group2) => {
+      if (group2) return "\\n"; // 如果匹配到的是换行符且不在 group1 (双引号块) 中，则替换
+      return group1; // 如果匹配到的是双引号块，保持原样
+    });
+
+    // 4. 🔑 处理最头疼的“字段内部未转义的双引号” (Case 1 & 2)
+    // 策略：寻找那些夹在汉字、字母、数字、标点符号中间，且前后不是 JSON 结构符号的孤立双引号
+    fixed = fixed.replace(/([^\{\}\[\]\s:,])"([^\{\}\[\]\s:,])/g, '$1\\"$2');
+
+    // 5. 补全裸奔的属性名 (Unquoted Keys)
+    // 匹配类似 { name: "val" } 或 , age: 30 这种 key 没加引号的情况
+    fixed = fixed.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+
+    // 6. 还原被错误包裹的布尔值、数字和 null
+    // 将 "true" -> true, "false" -> false, "null" -> null
+    fixed = fixed.replace(/:[ \t]*"(true|false|null)"/gi, (match, val) => {
+      return `: ${val.toLowerCase()}`;
+    });
+
+    // 1. 括号自动补全 (针对截断的情况)
+    // 扫描整个字符串，计算括号平衡
+    const stack: ("{" | "[")[] = [];
+    for (let i = 0; i < fixed.length; i++) {
+      const char = fixed[i];
+      if (char === '{') stack.push('{');
+      else if (char === '[') stack.push('[');
+      else if (char === '}') {
+        if (stack[stack.length - 1] === '{') stack.pop();
+      } else if (char === ']') {
+        if (stack[stack.length - 1] === '[') stack.pop();
+      }
+    }
+    // 按相反顺序补齐缺失的闭合括号
+    while (stack.length > 0) {
+      const open = stack.pop();
+      fixed += (open === '{' ? '}' : ']');
+    }
+
+    return fixed;
+  }
+
+  public tryParseJson(str: string): any {
     if (!str) return {};
+    
+    // 首先尝试原始解析
     try {
       return JSON.parse(str);
     } catch (_e) {
-      // 容错：尝试提取第一个 { 和最后一个 } 之间的内容
-      const firstBrace = str.indexOf("{");
-      const lastBrace = str.lastIndexOf("}");
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        const candidate = str.slice(firstBrace, lastBrace + 1);
+      // 原始解析失败，进入修复逻辑
+      const repaired = this.repairJson(str);
+      try {
+        return JSON.parse(repaired);
+      } catch (err) {
+        // 如果修复后还是失败，尝试最后的挣扎：处理极端换行和控制字符
         try {
-          return JSON.parse(candidate);
-        } catch (_e2) {
-          // 进一步容错：处理常见的 JSON 错误（简单版）
-          try {
-            // 替换未转义的换行符
-            const fixed = candidate
-              .replace(/\n/g, "\\n")
-              .replace(/\r/g, "\\r");
-            return JSON.parse(fixed);
-          } catch (_e3) {
-            return null;
-          }
+          const lastResort = repaired
+            .replace(/\n/g, "\\n")
+            .replace(/\r/g, "\\r")
+            .replace(/\t/g, "\\t");
+          return JSON.parse(lastResort);
+        } catch (_finalError) {
+          log("debug", "JSON Repair failed", {
+            original: str.slice(0, 200),
+            repaired: repaired.slice(0, 200),
+            error: String(err)
+          });
+          return null;
         }
       }
-      return null;
     }
   }
 

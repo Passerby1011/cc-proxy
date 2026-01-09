@@ -148,8 +148,7 @@ export async function forwardRequest(
         delimiter,
         thinkingEnabled,
         inputTokens,
-        request.model, // 传入原始模型名
-        enrichedRequest.messages, // 🔑 传递原始消息用于重试
+        enrichedRequest, // 🔑 传递增强后的请求对象（包含正确的 messages 和参数）
         finalUrl, // 🔑 传递上游 URL
         headers, // 🔑 传递请求头
         protocol, // 🔑 传递协议类型
@@ -164,8 +163,7 @@ export async function forwardRequest(
         delimiter,
         thinkingEnabled,
         inputTokens,
-        request.model, // 传入原始模型名
-        enrichedRequest.messages, // 🔑 传递原始消息用于重试
+        enrichedRequest, // 🔑 传递增强后的请求对象
         finalUrl, // 🔑 传递上游 URL
         headers, // 🔑 传递请求头
         protocol, // 🔑 传递协议类型

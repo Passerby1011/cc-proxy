@@ -38,13 +38,14 @@ export class ParsedToolInterceptor {
   async interceptToolCall(toolCall: ParsedInvokeCall, writer: SSEWriter): Promise<boolean> {
     const toolName = toolCall.name;
 
-    // 判断是否需要拦截
-    if (toolName === "web_search" && this.webToolsConfig.enableSearchIntercept) {
+    // 判断是否需要拦截 web_search_20250305
+    if (toolName === "web_search_20250305" && this.webToolsConfig.enableSearchIntercept) {
       await this.handleWebSearch(toolCall, writer);
       return true;
     }
 
-    if (toolName === "web_fetch" && this.webToolsConfig.enableFetchIntercept) {
+    // 判断是否需要拦截 web_fetch_20250910
+    if (toolName === "web_fetch_20250910" && this.webToolsConfig.enableFetchIntercept) {
       await this.handleWebFetch(toolCall, writer);
       return true;
     }
@@ -78,11 +79,10 @@ export class ParsedToolInterceptor {
       blocked_domains: toolCall.arguments.blocked_domains as string[] | undefined,
     };
 
-    // 执行搜索
-    const searchResult = await this.toolInterceptor.handleWebSearch(
+    // 执行搜索（直接传入 query，不再生成）
+    const searchResult = await this.toolInterceptor.handleWebSearchWithQuery(
       webSearchTool,
-      this.messages,
-      this.upstreamInfo,
+      query,
       this.requestId,
     );
 

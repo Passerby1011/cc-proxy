@@ -66,6 +66,92 @@ export class ToolInterceptor {
   }
 
   /**
+   * 处理 Web Search 拦截（简单模式 - 使用已提供的 query）
+   */
+  async handleWebSearchWithQuery(
+    tool: AnthropicWebSearchToolDefinition,
+    query: string,
+    requestId: string,
+  ): Promise<SearchInterceptResult> {
+    // 调用 Firecrawl Search API
+    const searchParams = {
+      query,
+      limit: this.webToolsConfig.maxSearchResults,
+      location: tool.user_location,
+      scrape_options: {
+        formats: ["markdown"],
+      },
+    };
+
+    const firecrawlResponse = await this.firecrawlClient.search(searchParams);
+
+    log("info", `🔎 Firecrawl search completed`, {
+      requestId,
+      query,
+      resultsCount: firecrawlResponse.data.web.length,
+      creditsUsed: firecrawlResponse.credits_used,
+    });
+
+    // 过滤域名（如果有限制）
+    if (tool.allowed_domains && tool.allowed_domains.length > 0) {
+      firecrawlResponse.data.web = firecrawlResponse.data.web.filter((result) =>
+        tool.allowed_domains!.some((domain) => result.url.includes(domain))
+      );
+      log("info", `🔍 Filtered by allowed_domains`, {
+        requestId,
+        remainingCount: firecrawlResponse.data.web.length,
+        allowedDomains: tool.allowed_domains,
+      });
+    }
+
+    if (tool.blocked_domains && tool.blocked_domains.length > 0) {
+      firecrawlResponse.data.web = firecrawlResponse.data.web.filter((result) =>
+        !tool.blocked_domains!.some((domain) => result.url.includes(domain))
+      );
+      log("info", `🚫 Filtered by blocked_domains`, {
+        requestId,
+        remainingCount: firecrawlResponse.data.web.length,
+        blockedDomains: tool.blocked_domains,
+      });
+    }
+
+    // 生成唯一的 tool use id (使用 server_tool_use 的 srvtoolu_ 前缀)
+    const toolUseId = `srvtoolu_${crypto.randomUUID().replace(/-/g, "").substring(0, 22)}`;
+
+    // 转换为 Anthropic 格式
+    const toolResult = FormatConverter.convertSearchResult(
+      firecrawlResponse,
+      toolUseId,
+    );
+
+    log("info", `📦 Search result converted to Anthropic format`, {
+      requestId,
+      toolUseId,
+      contentCount: toolResult.content.length,
+      sampleResult: toolResult.content[0] ? {
+        url: toolResult.content[0].url.substring(0, 50),
+        title: toolResult.content[0].title.substring(0, 50),
+        hasEncrypted: !!toolResult.content[0].encrypted_content,
+      } : null,
+    });
+
+    // 构建 server_tool_use
+    const serverToolUse: AnthropicServerToolUse = {
+      type: "server_tool_use",
+      id: toolUseId,
+      name: "web_search",
+      input: {
+        query,
+      },
+    };
+
+    return {
+      serverToolUse,
+      toolResult,
+    };
+  }
+
+  /**
    * 处理 Web Search 拦截（简单模式）
    */
   async handleWebSearch(

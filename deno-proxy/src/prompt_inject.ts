@@ -69,7 +69,47 @@ function escapeText(text: string): string {
 function buildToolsXml(tools: ClaudeToolDefinition[]): string {
   if (!tools.length) return "<function_list>None</function_list>";
   const items = tools.map((tool, index) => {
-    const schema = tool.input_schema ?? {};
+    // 对于 Anthropic 原生工具（web_search_20250305, web_fetch_20250910），使用 type 作为名称
+    const isWebSearchTool = (tool as any).type === 'web_search_20250305';
+    const isWebFetchTool = (tool as any).type === 'web_fetch_20250910';
+    const toolName = (isWebSearchTool || isWebFetchTool)
+      ? (tool as any).type
+      : tool.name;
+
+    // 为官方 web 工具手动定义 schema（因为它们的 input_schema 为空）
+    let schema = tool.input_schema ?? {};
+    if (isWebSearchTool) {
+      schema = {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The search query to execute"
+          },
+          allowed_domains: {
+            type: "array",
+            description: "Optional list of allowed domains to restrict search results"
+          },
+          blocked_domains: {
+            type: "array",
+            description: "Optional list of blocked domains to exclude from search results"
+          }
+        },
+        required: ["query"]
+      };
+    } else if (isWebFetchTool) {
+      schema = {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "The URL to fetch and scrape"
+          }
+        },
+        required: ["url"]
+      };
+    }
+
     const props = (schema.properties ?? {}) as Record<string, unknown>;
     const required = (schema.required ?? []) as string[];
     const parameters = Object.entries(props).map(([name, info]) => {
@@ -94,7 +134,7 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
 
     return [
       `  <tool id="${index + 1}">`,
-      `    <name>${tool.name}</name>`,
+      `    <name>${toolName}</name>`,
       `    <description>${escapeText(tool.description ?? "None")}</description>`,
       "    <required>",
       requiredXml,

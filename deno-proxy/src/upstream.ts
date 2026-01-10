@@ -152,6 +152,7 @@ export async function forwardRequest(
         finalUrl, // 🔑 传递上游 URL
         headers, // 🔑 传递请求头
         protocol, // 🔑 传递协议类型
+        clientApiKey, // 🔑 传递客户端 API Key
       );
       return { inputTokens, outputTokens: result?.outputTokens };
     } else {
@@ -167,6 +168,7 @@ export async function forwardRequest(
         finalUrl, // 🔑 传递上游 URL
         headers, // 🔑 传递请求头
         protocol, // 🔑 传递协议类型
+        clientApiKey, // 🔑 传递客户端 API Key
       );
       return { inputTokens, outputTokens: result?.outputTokens };
     }

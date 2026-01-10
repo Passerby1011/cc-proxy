@@ -21,6 +21,7 @@ export async function handleAnthropicStream(
   upstreamUrl = "",
   upstreamHeaders: Record<string, string> = {},
   protocol: "openai" | "anthropic" = "anthropic",
+  clientApiKey?: string, // 新增：客户端 API Key
 ) {
   const model = originalRequest?.model || "claude-3-5-sonnet-20241022";
   const parser = new ToolifyParser(delimiter, thinkingEnabled, requestId);
@@ -72,6 +73,11 @@ export async function handleAnthropicStream(
         upstreamModel = config.upstreamModelOverride ?? modelName;
         upstreamProtocol = config.defaultProtocol;
       }
+    }
+
+    // 如果启用了透传 API key，则优先使用客户端提供的 key
+    if (config.passthroughApiKey && clientApiKey) {
+      upstreamApiKey = clientApiKey;
     }
 
     const upstreamInfo = {
@@ -144,6 +150,11 @@ export async function handleAnthropicStream(
         upstreamModel = config.upstreamModelOverride ?? modelName;
         upstreamProtocol = config.defaultProtocol;
       }
+    }
+
+    // 如果启用了透传 API key，则优先使用客户端提供的 key
+    if (config.passthroughApiKey && clientApiKey) {
+      upstreamApiKey = clientApiKey;
     }
 
     const upstreamInfo = {

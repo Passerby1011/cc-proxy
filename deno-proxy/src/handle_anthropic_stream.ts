@@ -1,4 +1,4 @@
-import { ClaudeStream } from "./claude_writer.ts";
+import { ClaudeStream, ToolInterceptCallback } from "./claude_writer.ts";
 import { ProxyConfig } from "./config.ts";
 import { ToolifyParser } from "./parser.ts";
 import { SSEWriter } from "./sse.ts";
@@ -7,6 +7,7 @@ import { ToolCallDelimiter } from "./signals.ts";
 import { ToolCallRetryHandler } from "./tool_retry.ts";
 import { ClaudeRequest, ClaudeMessage } from "./types.ts";
 import { ToolUseInterceptor } from "./tools/tool_use_interceptor.ts";
+import { ParsedToolInterceptor } from "./tools/parsed_tool_interceptor.ts";
 
 export async function handleAnthropicStream(
   response: Response,
@@ -23,12 +24,10 @@ export async function handleAnthropicStream(
 ) {
   const model = originalRequest?.model || "claude-3-5-sonnet-20241022";
   const parser = new ToolifyParser(delimiter, thinkingEnabled, requestId);
-  const claudeStream = new ClaudeStream(writer, config, requestId, inputTokens, model);
 
-  await claudeStream.init();
+  // 初始化工具拦截回调（如果启用且不是自动触发模式）
+  let toolInterceptCallback: ToolInterceptCallback | undefined;
 
-  // 初始化工具调用拦截器（如果启用且不是自动触发模式）
-  let toolUseInterceptor: ToolUseInterceptor | null = null;
   if (
     config.firecrawl &&
     config.webTools &&
@@ -37,6 +36,78 @@ export async function handleAnthropicStream(
     originalRequest
   ) {
     // 解析上游信息
+    const modelName = originalRequest.model;
+    const plusIndex = modelName.indexOf("+");
+    let upstreamBaseUrl: string;
+    let upstreamApiKey: string | undefined;
+    let upstreamModel: string;
+    let upstreamProtocol: "openai" | "anthropic";
+
+    if (plusIndex !== -1) {
+      const channelName = modelName.slice(0, plusIndex);
+      const actualModel = modelName.slice(plusIndex + 1);
+      const channel = config.channelConfigs.find((c) => c.name === channelName);
+
+      if (channel) {
+        upstreamBaseUrl = channel.baseUrl;
+        upstreamApiKey = channel.apiKey;
+        upstreamModel = actualModel;
+        upstreamProtocol = channel.protocol ?? config.defaultProtocol;
+      } else {
+        upstreamBaseUrl = config.upstreamBaseUrl!;
+        upstreamApiKey = config.upstreamApiKey;
+        upstreamModel = modelName;
+        upstreamProtocol = config.defaultProtocol;
+      }
+    } else {
+      if (config.channelConfigs.length > 0) {
+        const channel = config.channelConfigs[0];
+        upstreamBaseUrl = channel.baseUrl;
+        upstreamApiKey = channel.apiKey;
+        upstreamModel = modelName;
+        upstreamProtocol = channel.protocol ?? config.defaultProtocol;
+      } else {
+        upstreamBaseUrl = config.upstreamBaseUrl!;
+        upstreamApiKey = config.upstreamApiKey;
+        upstreamModel = config.upstreamModelOverride ?? modelName;
+        upstreamProtocol = config.defaultProtocol;
+      }
+    }
+
+    const upstreamInfo = {
+      baseUrl: upstreamBaseUrl,
+      apiKey: upstreamApiKey,
+      model: upstreamModel,
+      protocol: upstreamProtocol,
+    };
+
+    const parsedInterceptor = new ParsedToolInterceptor(
+      config.firecrawl,
+      config.webTools,
+      requestId,
+      originalRequest.messages,
+      upstreamInfo,
+    );
+
+    toolInterceptCallback = async (toolCall, writer) => {
+      return await parsedInterceptor.interceptToolCall(toolCall, writer);
+    };
+  }
+
+  const claudeStream = new ClaudeStream(writer, config, requestId, inputTokens, model, toolInterceptCallback);
+
+  await claudeStream.init();
+
+  // 初始化原生工具调用拦截器（用于真正的 Anthropic API 响应）
+  let toolUseInterceptor: ToolUseInterceptor | null = null;
+  if (
+    config.firecrawl &&
+    config.webTools &&
+    !config.webTools.autoTrigger && // 只有非自动触发模式才使用拦截器
+    (config.webTools.enableSearchIntercept || config.webTools.enableFetchIntercept) &&
+    originalRequest
+  ) {
+    // 解析上游信息（复用上面的逻辑）
     const modelName = originalRequest.model;
     const plusIndex = modelName.indexOf("+");
     let upstreamBaseUrl: string;

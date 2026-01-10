@@ -4,6 +4,9 @@ import { TextAggregator } from "./aggregator.ts";
 import { ProxyConfig } from "./config.ts";
 import { countTokensWithTiktoken } from "./tiktoken.ts";
 
+// 工具拦截回调类型
+export type ToolInterceptCallback = (toolCall: ParsedInvokeCall, writer: SSEWriter) => Promise<boolean>;
+
 function generateToolId(): string {
   // 生成随机 ID：toolu_ + 12位随机字符
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -30,8 +33,16 @@ interface StreamContext {
 export class ClaudeStream {
   private context: StreamContext;
   private tokenMultiplier: number;
+  private toolInterceptCallback?: ToolInterceptCallback; // 工具拦截回调
 
-  constructor(private writer: SSEWriter, config: ProxyConfig, requestId: string, inputTokens: number = 0, model: string = "claude-3-5-sonnet-20241022") {
+  constructor(
+    private writer: SSEWriter,
+    config: ProxyConfig,
+    requestId: string,
+    inputTokens: number = 0,
+    model: string = "claude-3-5-sonnet-20241022",
+    toolInterceptCallback?: ToolInterceptCallback
+  ) {
     this.context = {
       requestId,
       writer,
@@ -48,6 +59,7 @@ export class ClaudeStream {
       ? config.tokenMultiplier
       : 1.0;
     (this.context as any).inputTokens = inputTokens;
+    this.toolInterceptCallback = toolInterceptCallback;
   }
 
   getTotalOutputTokens(): number {
@@ -92,6 +104,17 @@ export class ClaudeStream {
         await this.context.aggregator.flushAsync();
         await this.endTextBlock();
         await this.endThinkingBlock();
+
+        // 如果有工具拦截回调，先尝试拦截
+        if (this.toolInterceptCallback) {
+          const intercepted = await this.toolInterceptCallback(event.call, this.writer);
+          if (intercepted) {
+            // 工具调用已被拦截并处理，跳过默认发送
+            continue;
+          }
+        }
+
+        // 未被拦截，正常发送工具调用
         await this.emitToolCall(event.call);
       } else if (event.type === "end") {
         await this.finish();

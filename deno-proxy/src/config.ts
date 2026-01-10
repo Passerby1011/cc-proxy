@@ -5,6 +5,7 @@ export interface ChannelConfig {
   baseUrl: string;
   apiKey?: string;
   protocol?: "openai" | "anthropic"; // 渠道协议类型，默认为 openai
+  autoTrigger?: boolean; // 渠道级拦截触发模式（可选，未设置则使用全局配置）
 }
 
 export interface ToolCallRetryConfig {
@@ -149,6 +150,7 @@ function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelCon
     const baseUrl = Deno.env.get(`CHANNEL_${i}_BASE_URL`);
     const apiKey = Deno.env.get(`CHANNEL_${i}_API_KEY`);
     const rawProtocol = Deno.env.get(`CHANNEL_${i}_PROTOCOL`);
+    const rawAutoTrigger = Deno.env.get(`CHANNEL_${i}_AUTO_TRIGGER`);
 
     if (!name || !baseUrl) {
       // 如果缺少必要字段，停止搜索
@@ -159,11 +161,21 @@ function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelCon
     const protocol = (rawProtocol as "openai" | "anthropic") ||
       detectProtocol(baseUrl, defaultProtocol);
 
+    // 解析 autoTrigger（可选配置）
+    let autoTrigger: boolean | undefined;
+    if (rawAutoTrigger === "true") {
+      autoTrigger = true;
+    } else if (rawAutoTrigger === "false") {
+      autoTrigger = false;
+    }
+    // 如果未设置，保持 undefined，使用全局配置
+
     configs.push({
       name,
       baseUrl,
       apiKey,
       protocol,
+      autoTrigger,
     });
     i++;
   }
@@ -281,4 +293,65 @@ export function loadConfig(): ProxyConfig {
     firecrawl,
     webTools,
   };
+}
+
+/**
+ * 解析模型名并确定最终的 autoTrigger 配置
+ * 优先级：模型名前缀 > 渠道配置 > 全局配置
+ *
+ * @param modelName - 完整的模型名（可能包含 cc+ 或 chat+ 前缀）
+ * @param channel - 渠道配置（可选）
+ * @param globalAutoTrigger - 全局 autoTrigger 配置
+ * @returns { autoTrigger: boolean, actualModelName: string, channelName?: string }
+ */
+export function resolveAutoTrigger(
+  modelName: string,
+  channelConfigs: ChannelConfig[],
+  globalAutoTrigger: boolean
+): { autoTrigger: boolean; actualModelName: string; channelName?: string } {
+  // 1. 检查模型名前缀（最高优先级）
+  if (modelName.startsWith("cc+")) {
+    // cc+ 前缀 → 强制自动触发模式
+    const rest = modelName.slice(3); // 移除 "cc+"
+    const plusIndex = rest.indexOf("+");
+    if (plusIndex !== -1) {
+      return {
+        autoTrigger: true,
+        actualModelName: rest,
+        channelName: rest.slice(0, plusIndex),
+      };
+    }
+    return { autoTrigger: true, actualModelName: rest };
+  }
+
+  if (modelName.startsWith("chat+")) {
+    // chat+ 前缀 → 强制按需拦截模式
+    const rest = modelName.slice(5); // 移除 "chat+"
+    const plusIndex = rest.indexOf("+");
+    if (plusIndex !== -1) {
+      return {
+        autoTrigger: false,
+        actualModelName: rest,
+        channelName: rest.slice(0, plusIndex),
+      };
+    }
+    return { autoTrigger: false, actualModelName: rest };
+  }
+
+  // 2. 检查渠道配置（次优先级）
+  const plusIndex = modelName.indexOf("+");
+  if (plusIndex !== -1) {
+    const channelName = modelName.slice(0, plusIndex);
+    const channel = channelConfigs.find((c) => c.name === channelName);
+    if (channel && channel.autoTrigger !== undefined) {
+      return {
+        autoTrigger: channel.autoTrigger,
+        actualModelName: modelName,
+        channelName,
+      };
+    }
+  }
+
+  // 3. 使用全局配置（默认）
+  return { autoTrigger: globalAutoTrigger, actualModelName: modelName };
 }

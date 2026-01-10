@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { loadConfig, ProxyConfig } from "./config.ts";
+import { loadConfig, ProxyConfig, resolveAutoTrigger } from "./config.ts";
 import { log, logRequest, closeRequestLog, logRequestStart, logRequestComplete, logPhase, LogPhase } from "./logging.ts";
 import { forwardRequest } from "./upstream.ts";
 import { SSEWriter } from "./sse.ts";
@@ -101,21 +101,28 @@ async function handleMessages(req: Request, requestId: string) {
     // 判断是否为流式请求：Anthropic 默认为非流式，仅当显式设为 true 时才流式
     const isStream = body.stream === true;
 
-    // 检查是否需要拦截 Web Search/Fetch 工具调用（旧逻辑：自动触发模式）
+    // 检查是否需要拦截 Web Search/Fetch 工具调用
     const shouldInterceptTools = ToolInterceptor.shouldIntercept(
       body.tools,
       config.webTools,
     );
 
-    // 只有在自动触发模式下才使用旧的提前拦截逻辑
-    if (shouldInterceptTools && config.firecrawl && config.webTools && config.webTools.autoTrigger) {
-      // 在拦截前先解析渠道信息，以便智能模式使用
+    // 解析模型名并确定 autoTrigger 配置（考虑前缀、渠道、全局配置）
+    const { autoTrigger: resolvedAutoTrigger, actualModelName } = resolveAutoTrigger(
+      body.model,
+      config.channelConfigs,
+      config.webTools?.autoTrigger ?? true
+    );
+
+    // 只有在自动触发模式下才使用提前拦截逻辑
+    if (shouldInterceptTools && config.firecrawl && config.webTools && resolvedAutoTrigger) {
+      // 在拦截前先解析渠道信息，以便智能模式使用（使用解析后的模型名）
       let upstreamBaseUrl: string;
       let upstreamApiKey: string | undefined;
       let upstreamModel: string;
       let upstreamProtocol: "openai" | "anthropic";
 
-      const modelName = body.model;
+      const modelName = actualModelName;
       const plusIndex = modelName.indexOf("+");
 
       if (plusIndex !== -1) {

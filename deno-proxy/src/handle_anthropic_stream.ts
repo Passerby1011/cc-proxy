@@ -1,5 +1,5 @@
 import { ClaudeStream, ToolInterceptCallback } from "./claude_writer.ts";
-import { ProxyConfig } from "./config.ts";
+import { ProxyConfig, resolveAutoTrigger } from "./config.ts";
 import { ToolifyParser } from "./parser.ts";
 import { SSEWriter } from "./sse.ts";
 import { log } from "./logging.ts";
@@ -31,72 +31,81 @@ export async function handleAnthropicStream(
   if (
     config.firecrawl &&
     config.webTools &&
-    !config.webTools.autoTrigger && // 只有非自动触发模式才使用拦截器
     (config.webTools.enableSearchIntercept || config.webTools.enableFetchIntercept) &&
     originalRequest
   ) {
-    // 解析上游信息
-    const modelName = originalRequest.model;
-    const plusIndex = modelName.indexOf("+");
-    let upstreamBaseUrl: string;
-    let upstreamApiKey: string | undefined;
-    let upstreamModel: string;
-    let upstreamProtocol: "openai" | "anthropic";
-
-    if (plusIndex !== -1) {
-      const channelName = modelName.slice(0, plusIndex);
-      const actualModel = modelName.slice(plusIndex + 1);
-      const channel = config.channelConfigs.find((c) => c.name === channelName);
-
-      if (channel) {
-        upstreamBaseUrl = channel.baseUrl;
-        upstreamApiKey = channel.apiKey;
-        upstreamModel = actualModel;
-        upstreamProtocol = channel.protocol ?? config.defaultProtocol;
-      } else {
-        upstreamBaseUrl = config.upstreamBaseUrl!;
-        upstreamApiKey = config.upstreamApiKey;
-        upstreamModel = modelName;
-        upstreamProtocol = config.defaultProtocol;
-      }
-    } else {
-      if (config.channelConfigs.length > 0) {
-        const channel = config.channelConfigs[0];
-        upstreamBaseUrl = channel.baseUrl;
-        upstreamApiKey = channel.apiKey;
-        upstreamModel = modelName;
-        upstreamProtocol = channel.protocol ?? config.defaultProtocol;
-      } else {
-        upstreamBaseUrl = config.upstreamBaseUrl!;
-        upstreamApiKey = config.upstreamApiKey;
-        upstreamModel = config.upstreamModelOverride ?? modelName;
-        upstreamProtocol = config.defaultProtocol;
-      }
-    }
-
-    // 如果启用了透传 API key，则优先使用客户端提供的 key
-    if (config.passthroughApiKey && clientApiKey) {
-      upstreamApiKey = clientApiKey;
-    }
-
-    const upstreamInfo = {
-      baseUrl: upstreamBaseUrl,
-      apiKey: upstreamApiKey,
-      model: upstreamModel,
-      protocol: upstreamProtocol,
-    };
-
-    const parsedInterceptor = new ParsedToolInterceptor(
-      config.firecrawl,
-      config.webTools,
-      requestId,
-      originalRequest.messages,
-      upstreamInfo,
+    // 解析模型名并确定 autoTrigger 配置（考虑前缀、渠道、全局配置）
+    const { autoTrigger: resolvedAutoTrigger, actualModelName } = resolveAutoTrigger(
+      originalRequest.model,
+      config.channelConfigs,
+      config.webTools.autoTrigger
     );
 
-    toolInterceptCallback = async (toolCall, writer) => {
-      return await parsedInterceptor.interceptToolCall(toolCall, writer);
-    };
+    // 只有非自动触发模式才使用拦截器
+    if (!resolvedAutoTrigger) {
+      // 解析上游信息（使用解析后的模型名）
+      const modelName = actualModelName;
+      const plusIndex = modelName.indexOf("+");
+      let upstreamBaseUrl: string;
+      let upstreamApiKey: string | undefined;
+      let upstreamModel: string;
+      let upstreamProtocol: "openai" | "anthropic";
+
+      if (plusIndex !== -1) {
+        const channelName = modelName.slice(0, plusIndex);
+        const actualModel = modelName.slice(plusIndex + 1);
+        const channel = config.channelConfigs.find((c) => c.name === channelName);
+
+        if (channel) {
+          upstreamBaseUrl = channel.baseUrl;
+          upstreamApiKey = channel.apiKey;
+          upstreamModel = actualModel;
+          upstreamProtocol = channel.protocol ?? config.defaultProtocol;
+        } else {
+          upstreamBaseUrl = config.upstreamBaseUrl!;
+          upstreamApiKey = config.upstreamApiKey;
+          upstreamModel = modelName;
+          upstreamProtocol = config.defaultProtocol;
+        }
+      } else {
+        if (config.channelConfigs.length > 0) {
+          const channel = config.channelConfigs[0];
+          upstreamBaseUrl = channel.baseUrl;
+          upstreamApiKey = channel.apiKey;
+          upstreamModel = modelName;
+          upstreamProtocol = channel.protocol ?? config.defaultProtocol;
+        } else {
+          upstreamBaseUrl = config.upstreamBaseUrl!;
+          upstreamApiKey = config.upstreamApiKey;
+          upstreamModel = config.upstreamModelOverride ?? modelName;
+          upstreamProtocol = config.defaultProtocol;
+        }
+      }
+
+      // 如果启用了透传 API key，则优先使用客户端提供的 key
+      if (config.passthroughApiKey && clientApiKey) {
+        upstreamApiKey = clientApiKey;
+      }
+
+      const upstreamInfo = {
+        baseUrl: upstreamBaseUrl,
+        apiKey: upstreamApiKey,
+        model: upstreamModel,
+        protocol: upstreamProtocol,
+      };
+
+      const parsedInterceptor = new ParsedToolInterceptor(
+        config.firecrawl,
+        config.webTools,
+        requestId,
+        originalRequest.messages,
+        upstreamInfo,
+      );
+
+      toolInterceptCallback = async (toolCall, writer) => {
+        return await parsedInterceptor.interceptToolCall(toolCall, writer);
+      };
+    }
   }
 
   const claudeStream = new ClaudeStream(writer, config, requestId, inputTokens, model, toolInterceptCallback);

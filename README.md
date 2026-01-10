@@ -138,12 +138,14 @@ export CHANNEL_1_NAME=openai
 export CHANNEL_1_BASE_URL=https://api.openai.com/v1/chat/completions
 export CHANNEL_1_API_KEY=sk-...
 export CHANNEL_1_PROTOCOL=openai  # 可选，会自动识别
+export CHANNEL_1_AUTO_TRIGGER=true  # 可选，渠道级拦截触发模式
 
 # 渠道 2: Claude
 export CHANNEL_2_NAME=claude
 export CHANNEL_2_BASE_URL=https://api.anthropic.com/v1/messages
 export CHANNEL_2_API_KEY=sk-ant-...
 export CHANNEL_2_PROTOCOL=anthropic
+export CHANNEL_2_AUTO_TRIGGER=false  # 可选，按需拦截
 
 # 渠道 3: DeepSeek
 export CHANNEL_3_NAME=deepseek
@@ -156,6 +158,15 @@ export CHANNEL_3_PROTOCOL=openai
 - `openai+gpt-4o`
 - `claude+claude-3-5-sonnet-20241022`
 - `deepseek+deepseek-chat`
+
+**高级用法 - 模型名前缀控制拦截模式**：
+- `cc+渠道+模型` → 强制使用**自动触发模式**（适用于 Claude Code）
+- `chat+渠道+模型` → 强制使用**按需拦截模式**（适用于 Chat 应用）
+
+示例：
+- `cc+openai+gpt-4o` - 使用 OpenAI 渠道，自动触发搜索
+- `chat+claude+claude-3-5-sonnet` - 使用 Claude 渠道，等待 AI 调用
+- `openai+gpt-4o` - 使用 OpenAI 渠道，遵循渠道或全局配置
 
 ### 数据存储配置
 
@@ -191,13 +202,13 @@ postgresql://username:password@host:port/database
 | `FIRECRAWL_MAX_RETRIES` | `3` | 最大重试次数 |
 | `FIRECRAWL_RETRY_DELAY` | `1000` | 重试延迟（毫秒） |
 
-### Web Search 配置 (推荐网页配置)
+### Web Search & Fetch 配置 (推荐网页配置)
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
 | `ENABLE_WEB_SEARCH_INTERCEPT` | `false` | 启用 Web Search 拦截 |
 | `ENABLE_WEB_FETCH_INTERCEPT` | `false` | 启用 Web Fetch 拦截 |
-| `WEB_TOOLS_AUTO_TRIGGER` | `false` | 自动触发模式（true=检测到工具就执行，false=等AI调用） |
+| `WEB_TOOLS_AUTO_TRIGGER` | `true` | 全局拦截触发模式（true=自动触发，false=按需拦截） |
 | `WEB_SEARCH_MODE` | `smart` | 工作模式（simple/smart） |
 | `MAX_SEARCH_RESULTS` | `10` | 最大搜索结果数量 |
 | `DEEP_BROWSE_ENABLED` | `false` | 启用深入浏览（智能模式） |
@@ -205,14 +216,69 @@ postgresql://username:password@host:port/database
 | `DEEP_BROWSE_PAGE_CONTENT_LIMIT` | `5000` | 每页内容字符数限制 |
 | `MAX_FETCH_CONTENT_TOKENS` | `100000` | Web Fetch 内容最大 token 数 |
 
-**工作模式说明**：
-- **按需拦截（推荐，默认）**：正常对话流程，仅当 AI 主动调用工具时才拦截执行
-- **自动触发模式**：检测到请求中包含 web_search/web_fetch 工具就立即执行（设置 `WEB_TOOLS_AUTO_TRIGGER=true`）
+#### 🎯 拦截触发模式详解
 
-**搜索模式说明**：
-- **简单模式（simple）**：直接返回搜索结果
-- **智能模式（smart）**：调用上游 LLM 分析搜索结果并生成总结
-- **深入浏览（Deep Browse）**：智能模式下，AI 自动选择重要页面深入抓取
+**三级配置优先级**（从高到低）：
+
+1. **模型名前缀**（最高优先级，直接在请求中指定）
+   - `cc+渠道+模型` → 强制**自动触发模式**
+   - `chat+渠道+模型` → 强制**按需拦截模式**
+
+2. **渠道级配置**（中优先级，通过环境变量或 WebUI 配置）
+   - `CHANNEL_X_AUTO_TRIGGER=true` → 该渠道使用自动触发
+   - `CHANNEL_X_AUTO_TRIGGER=false` → 该渠道使用按需拦截
+   - 未设置时使用全局配置
+
+3. **全局配置**（默认配置）
+   - `WEB_TOOLS_AUTO_TRIGGER=true`（默认） → 全局自动触发
+   - `WEB_TOOLS_AUTO_TRIGGER=false` → 全局按需拦截
+
+**模式说明**：
+
+| 模式 | 触发时机 | 搜索词来源 | 适用场景 |
+|------|---------|-----------|---------|
+| **自动触发模式** | 检测到工具定义立即执行 | AI 自动生成搜索词 | Claude Code、MCP 等工具密集型应用 |
+| **按需拦截模式** | 等待 AI 主动调用工具 | 使用 AI 传入的 query | Chat 应用、普通对话场景 |
+
+**使用示例**：
+
+```bash
+# 场景 1: Claude Code 专用渠道
+export CHANNEL_1_NAME=code
+export CHANNEL_1_AUTO_TRIGGER=true  # 该渠道自动触发
+# 请求：code+claude-3-5-sonnet
+
+# 场景 2: Chat 应用专用渠道
+export CHANNEL_2_NAME=chat
+export CHANNEL_2_AUTO_TRIGGER=false  # 该渠道按需拦截
+# 请求：chat+gpt-4o
+
+# 场景 3: 使用模型名前缀临时覆盖
+# cc+chat+gpt-4o → 即使 chat 渠道配置为按需，也强制自动触发
+# chat+code+claude-3-5-sonnet → 即使 code 渠道配置为自动，也强制按需
+```
+
+**配置建议**：
+- **Claude Code 用户**：设置 `WEB_TOOLS_AUTO_TRIGGER=true`（默认）
+- **Chat 应用**：设置 `WEB_TOOLS_AUTO_TRIGGER=false` 或使用 `chat+` 前缀
+- **混合场景**：为不同渠道设置不同的 `AUTO_TRIGGER`，或使用模型名前缀
+
+#### 🔍 搜索模式说明
+
+**简单模式（simple）**：
+- 直接返回搜索结果和网页内容
+- 无 AI 分析，响应速度快
+- 适合需要原始数据的场景
+
+**智能模式（smart，推荐）**：
+- 调用上游 LLM 分析搜索结果
+- 自动生成总结和关键信息提取
+- 支持深入浏览功能
+
+**深入浏览（Deep Browse）**：
+- 仅在智能模式下可用
+- AI 自动选择最有价值的页面深入抓取
+- 综合多个页面内容生成最终分析
 
 
 ## 🙏 致谢

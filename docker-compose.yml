@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile
       args:
         DENO_VERSION: ${DENO_VERSION:-2.0.0}
-    image: cc-proxy:local
+    image: cc-proxy #或者用项目构建好的
     container_name: cc-proxy
     restart: unless-stopped
     environment:
@@ -27,4 +27,5 @@ services:
       - "3456:3456"
     volumes:
       - ./config.json:/app/config.json  # 配置持久化
+
 

@@ -43,6 +43,9 @@ function extractClientApiKey(req: Request): string | undefined {
 }
 
 function validateClientKey(req: Request, config: ProxyConfig): boolean {
+  // 如果启用了透传模式，跳过客户端密钥验证（以请求密钥为准）
+  if (config.passthroughApiKey) return true;
+
   if (!config.clientApiKey) return true;
   const clientKey = extractClientApiKey(req);
   if (!clientKey) return false;
@@ -93,8 +96,9 @@ async function handleMessages(req: Request, requestId: string) {
     await rateLimiter.acquire();
 
     // 提取可能需要透传的客户端 API key
+    // 如果启用透传模式，直接使用请求中的密钥（无视 CLIENT_API_KEY 和渠道密钥）
     const rawClientKey = extractClientApiKey(req);
-    const clientApiKey = (config.passthroughApiKey && rawClientKey && rawClientKey !== config.clientApiKey)
+    const clientApiKey = (config.passthroughApiKey && rawClientKey)
       ? rawClientKey
       : undefined;
 
@@ -156,8 +160,8 @@ async function handleMessages(req: Request, requestId: string) {
         }
       }
 
-      // 如果启用了透传 API key，则优先使用客户端提供的 key
-      if (config.passthroughApiKey && rawClientKey && rawClientKey !== config.clientApiKey) {
+      // 如果启用了透传 API key，则优先使用客户端提供的 key（无视渠道密钥）
+      if (config.passthroughApiKey && rawClientKey) {
         upstreamApiKey = rawClientKey;
       }
 

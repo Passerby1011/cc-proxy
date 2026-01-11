@@ -1034,9 +1034,14 @@
                                 <div class="form-group">
                                     <label class="checkbox-group">
                                         <input type="checkbox" checked=${config.passthroughApiKey} onChange=${e => updateField('passthroughApiKey', e.target.checked)} />
-                                        <span>透传客户端 API 密钥给上游</span>
+                                        <span>启用密钥透传模式（多租户）</span>
                                     </label>
-                                    <div class="helper-text" style="margin-left: 28px">启用后，将使用客户端发送的 API Key 而非配置的密钥</div>
+                                    <div class="helper-text" style="margin-left: 28px; padding: 12px; background: var(--warning-ultralight); border-left: 3px solid var(--warning); border-radius: 4px; margin-top: 8px;">
+                                        <strong>⚠️ 透传模式说明：</strong><br/>
+                                        • <strong>启用后：</strong>完全以请求密钥为准，跳过客户端密钥验证，无视渠道密钥<br/>
+                                        • <strong>关闭时：</strong>验证客户端密钥 → 使用渠道密钥或默认上游密钥<br/>
+                                        • <strong>安全提示：</strong>启用透传后，任何请求都会被接受并转发，请确保网络安全
+                                    </div>
                                 </div>
 
                                 <div class="section-title"><${Icons.Refresh} /> 工具调用重试机制</div>

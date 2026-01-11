@@ -111,11 +111,38 @@ deployctl deploy --project=cc-proxy deno-proxy/src/main.ts
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `CLIENT_API_KEY` | - | 客户端 API Key 验证（可选） |
-| `PASSTHROUGH_API_KEY` | `false` | 是否透传客户端密钥给上游 |
+| `CLIENT_API_KEY` | - | 客户端 API Key 验证（可选，**与透传模式互斥**） |
+| `PASSTHROUGH_API_KEY` | `false` | 是否透传客户端密钥给上游（**启用后将跳过 CLIENT_API_KEY 验证**） |
 | `MAX_REQUESTS_PER_MINUTE` | `10` | 每分钟最大请求数 |
 | `TIMEOUT_MS` | `120000` | 请求超时时间（毫秒） |
 | `AGGREGATION_INTERVAL_MS` | `35` | 流式响应聚合间隔（毫秒） |
+
+#### 🔑 密钥验证与透传模式
+
+**重要说明：`CLIENT_API_KEY` 和 `PASSTHROUGH_API_KEY` 是两种互斥的工作模式**
+
+**模式 1：代理验证模式（默认）**
+```bash
+export CLIENT_API_KEY=your-secure-key
+export PASSTHROUGH_API_KEY=false  # 可省略，默认为 false
+```
+- ✅ 客户端使用统一密钥 `your-secure-key` 验证身份
+- ✅ 代理使用渠道密钥或默认上游密钥调用上游 API
+- ✅ 适用于：统一管理、内部服务、安全隔离场景
+
+**模式 2：透传模式（多租户）**
+```bash
+# 不要设置 CLIENT_API_KEY
+export PASSTHROUGH_API_KEY=true
+```
+- ✅ **完全跳过客户端密钥验证**
+- ✅ **客户端请求中的密钥直接透传给上游 API**（无视 CLIENT_API_KEY 和渠道密钥）
+- ✅ 适用于：多租户场景、用户自带密钥、完全透传场景
+- ⚠️ 注意：启用后任何请求都会被接受并透传，请确保网络安全
+
+**密钥优先级规则：**
+- 透传模式关闭：`CLIENT_API_KEY 验证` → `渠道密钥` → `默认上游密钥`
+- 透传模式开启：`请求密钥（直接透传）` → 无视其他所有密钥配置
 
 ### 上游协议配置(推荐网页配置)
 

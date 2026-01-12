@@ -276,78 +276,102 @@ export function log(
 // 配置日志输出 - 隐藏敏感信息
 export function logConfigInfo(config: Record<string, unknown>, title: string) {
   if (LOGGING_DISABLED || levelOrder.info < levelOrder[configuredLevel]) return;
-  
+
   // 完全过滤掉所有包含密钥和URL的敏感字段
   const excludeFields = ['apiKey', 'clientApiKey', 'adminApiKey', 'pgStoreDsn', 'upstreamApiKey', 'baseUrl', 'upstreamBaseUrl', 'upstreamModelOverride', 'configFilePath'];
-  
+
   // 字段名称映射（代码变量名 -> 中文显示名）
   const fieldNameMap: Record<string, string> = {
     'port': '服务端口',
     'host': '绑定地址',
-    'requestTimeoutMs': '请求超时(ms)',
-    'aggregationIntervalMs': '聚合间隔(ms)',
-    'maxRequestsPerMinute': '频率限制(次/分钟)',
-    'tokenMultiplier': 'Token计费倍数',
+    'requestTimeoutMs': '请求超时',
+    'aggregationIntervalMs': '聚合间隔',
+    'maxRequestsPerMinute': '频率限制',
+    'tokenMultiplier': 'Token倍数',
     'autoPort': '自动端口',
-    'passthroughApiKey': '透传客户端密钥',
+    'passthroughApiKey': '透传模式',
     'defaultProtocol': '默认协议',
     'channelConfigs': '渠道配置',
-    'toolCallRetry': '工具重试配置',
+    'toolCallRetry': '工具重试',
+    'webTools': 'Web工具',
+    'firecrawl': 'Firecrawl',
   };
-  
+
   const safeConfig: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config)) {
     // 完全跳过所有敏感字段，不显示
     if (excludeFields.some(field => key.toLowerCase().includes(field.toLowerCase()))) {
       continue;
     }
-    
+
     // 跳过未映射的字段（避免显示程序内部字段或无效配置）
     if (!fieldNameMap[key]) {
       continue;
     }
-    
+
     // 使用中文名称
     const displayName = fieldNameMap[key];
-    
+
     if (key === 'channelConfigs' && Array.isArray(value)) {
-      // 渠道配置只显示非敏感信息
-      safeConfig[displayName] = value.map((ch: any, idx: number) => ({
-        '序号': `#${idx + 1}`,
-        '渠道名': ch.name,
-        '协议': ch.protocol,
-      }));
+      // 渠道配置简洁显示：[名称]-协议-触发模式
+      safeConfig[displayName] = value.map((ch: any) => {
+        const trigger = ch.autoTrigger === true ? '自动' : ch.autoTrigger === false ? '按需' : '全局';
+        return `${ch.name}-${ch.protocol}-${trigger}`;
+      });
     } else if (key === 'toolCallRetry' && value && typeof value === 'object') {
-      // 工具重试配置映射为中文
+      // 工具重试配置简洁显示
       const retry = value as any;
-      safeConfig['工具重试配置'] = {
-        '启用': retry.enabled ? '是' : '否',
-        '最大重试次数': retry.maxRetries,
-        '超时(ms)': retry.timeout,
-        '保持连接': retry.keepAlive ? '是' : '否',
-      };
+      if (retry.enabled) {
+        safeConfig[displayName] = `启用(${retry.maxRetries}次/${retry.timeout}ms)`;
+      } else {
+        safeConfig[displayName] = '关闭';
+      }
+    } else if (key === 'webTools' && value && typeof value === 'object') {
+      // Web工具配置简洁显示
+      const web = value as any;
+      const parts: string[] = [];
+      if (web.enableSearchIntercept) parts.push('Search');
+      if (web.enableFetchIntercept) parts.push('Fetch');
+      if (parts.length > 0) {
+        const mode = web.autoTrigger ? '自动触发' : '按需触发';
+        safeConfig[displayName] = `${parts.join('+')}/${mode}`;
+      } else {
+        safeConfig[displayName] = '关闭';
+      }
+    } else if (key === 'firecrawl' && value && typeof value === 'object') {
+      // Firecrawl 配置
+      const fc = value as any;
+      safeConfig[displayName] = fc.apiKey ? '已配置' : '未配置';
+    } else if (key === 'passthroughApiKey') {
+      safeConfig[displayName] = value ? '启用' : '关闭';
+    } else if (key === 'requestTimeoutMs' || key === 'aggregationIntervalMs') {
+      safeConfig[displayName] = `${value}ms`;
+    } else if (key === 'maxRequestsPerMinute') {
+      safeConfig[displayName] = `${value}次/分`;
     } else {
       safeConfig[displayName] = value;
     }
   }
-  
+
   if (LOG_FORMAT === "pretty") {
     console.log("");
-    console.log(colorize("┌" + "─".repeat(70), colors.gray));
-    console.log(colorize("│", colors.gray) + ` ${colorize("⚙️  [CONFIG]", colors.cyan)} ${colorize(title, colors.white)}`);
-    console.log(colorize("├" + "─".repeat(70), colors.gray));
-    
+    console.log(colorize("┌" + "─".repeat(60), colors.gray));
+    console.log(colorize("│", colors.gray) + ` ${colorize("⚙️  [CONFIG]", colors.cyan)} ${colorize(title, colors.bright + colors.white)}`);
+    console.log(colorize("└" + "─".repeat(60), colors.gray));
+
     for (const [key, value] of Object.entries(safeConfig)) {
       let displayValue: string;
-      if (typeof value === 'object' && value !== null) {
-        displayValue = JSON.stringify(value, null, 2).replace(/\n/g, '\n│    ');
+      if (Array.isArray(value)) {
+        // 数组每个元素单独一行
+        displayValue = value.map((item, idx) =>
+          `${colorize(`#${idx + 1}`, colors.gray)} ${colorize(String(item), colors.white)}`
+        ).join('\n     ');
       } else {
-        displayValue = String(value);
+        displayValue = colorize(String(value), colors.white);
       }
-      console.log(colorize("│", colors.gray) + `  ${colorize(key, colors.yellow)}: ${colorize(displayValue, colors.white)}`);
+      console.log(`  ${colorize("├─", colors.gray)} ${colorize(key, colors.yellow)}: ${displayValue}`);
     }
-    
-    console.log(colorize("└" + "─".repeat(70), colors.gray));
+
     console.log("");
   } else {
     log("info", title, safeConfig);
@@ -355,20 +379,23 @@ export function logConfigInfo(config: Record<string, unknown>, title: string) {
 }
 
 // 特殊格式：请求开始横幅
-export function logRequestStart(requestId: string, meta: { model?: string; tools?: number; stream?: boolean; channel?: string }) {
+export function logRequestStart(requestId: string, meta: { model?: string; tools?: number; stream?: boolean; channel?: string; autoTrigger?: boolean }) {
   if (LOGGING_DISABLED || levelOrder.info < levelOrder[configuredLevel]) return;
-  
+
   if (LOG_FORMAT === "pretty") {
     const shortId = requestId.slice(0, 8);
     const toolsInfo = meta.tools ? ` | ${colorize(`🔧 ${meta.tools} tools`, colors.magenta)}` : "";
     const streamInfo = meta.stream ? ` | ${colorize("📊 stream", colors.cyan)}` : "";
     const channelInfo = meta.channel ? ` | ${colorize(`🌐 ${meta.channel}`, colors.blue)}` : "";
-    
+    const triggerInfo = meta.autoTrigger !== undefined
+      ? ` | ${colorize(meta.autoTrigger ? "🚀 自动触发" : "💬 按需触发", meta.autoTrigger ? colors.green : colors.yellow)}`
+      : "";
+
     console.log("");
     console.log(colorize("┌" + "─".repeat(60), colors.gray));
     console.log(colorize("│", colors.gray) + ` ${LogPhase.REQUEST.icon} ${colorize(`[${LogPhase.REQUEST.label}]`, LogPhase.REQUEST.color)} ${colorize(shortId, colors.white)}`);
     if (meta.model) {
-      console.log(colorize("│", colors.gray) + ` ${colorize("🎯", colors.yellow)} Model: ${colorize(meta.model, colors.white)}${channelInfo}${toolsInfo}${streamInfo}`);
+      console.log(colorize("│", colors.gray) + ` ${colorize("🎯", colors.yellow)} Model: ${colorize(meta.model, colors.white)}${channelInfo}${triggerInfo}${toolsInfo}${streamInfo}`);
     }
     console.log(colorize("└" + "─".repeat(60), colors.gray));
   } else {

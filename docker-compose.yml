@@ -8,31 +8,24 @@ services:
       dockerfile: Dockerfile
       args:
         DENO_VERSION: ${DENO_VERSION:-2.0.0}
-    image: cc-proxy:local
+    image: cc-proxy #或者用项目构建好的
     container_name: cc-proxy
     restart: unless-stopped
     environment:
+      # 必需配置
+      ADMIN_API_KEY: changeme-admin-key  # 管理后台密钥（必需）
+
+      # 基础配置
       HOST: 0.0.0.0
       PORT: 3456
       LOG_LEVEL: info
-      UPSTREAM_BASE_URL: https://api.openai.com/v1/chat/completions
-      UPSTREAM_API_KEY: changeme-upstream-key
-      CLIENT_API_KEY: changeme-client-key
-      TIMEOUT_MS: 120000
-      MAX_REQUESTS_PER_MINUTE: 60
-      TOKEN_MULTIPLIER: "1.0"
-      PASSTHROUGH_API_KEY: "false"  # 设置为 true 以启用 API key 透传
-      # 渠道配置示例（可选）
-      # CHANNEL_1_NAME: elysiver
-      # CHANNEL_1_BASE_URL: https://api.elysiver.com/v1/chat/completions
-      # CHANNEL_1_API_KEY: sk-elysiver-...
+      # PGSTORE_DSN:postgresql://username:password@host:port/database
+
+      # 其他配置请访问管理后台 http://localhost:3456/admin 进行设置
+
     ports:
       - "3456:3456"
     volumes:
-      - ./logs:/app/deno-proxy/logs
-    networks:
-      - cc-proxy-net
+      - ./config.json:/app/config.json  # 配置持久化
 
-networks:
-  cc-proxy-net:
-    driver: bridge
+

@@ -8,7 +8,7 @@
 
 ### 1.1 目标
 
-在 cc-proxy 中集成 Firecrawl API,实现对 Anthropic 官方 Web Search 和 Web Fetch 功能的完全替代,使得不支持这两个功能的上游 API（如 OpenAI、DeepSeek 等）也能通过 cc-proxy 获得网络搜索和内容获取能力。
+在 cc-proxy 中集成 Firecrawl API,实现对 Anthropic 官方 Web Search 和 Web Fetch 功能的完全替代,使得不支持这两个功能的上游 API也能通过 cc-proxy 获得网络搜索和内容获取能力。
 
 ### 1.2 核心价值
 
@@ -28,8 +28,7 @@
 1. 响应格式差异需要转换层适配
 2. Anthropic 的 `encrypted_content` 需要模拟实现(使用不透明标识符)
 3. 流式响应需要处理 Firecrawl 的调用延迟
-4. 多轮对话需要维护搜索结果缓存
-5. 需要在"简单返回搜索结果"和"生成智能回答"之间做权衡
+4. 需要在"简单返回搜索结果"和"生成智能回答"之间做权衡
 
 **💰 成本考量**:
 - Anthropic Web Search: $10/1000次 + token成本
@@ -48,7 +47,7 @@
 ```
 
 **cc-proxy 的挑战**:
-- 上游 API(OpenAI/DeepSeek)不支持 server-side tool
+- 上游 API不支持 server-side tool
 - 需要在代理层拦截并实现搜索逻辑
 - 有两种策略可选:
   1. **简单模式**: 只返回搜索结果(快速、简单)
@@ -118,7 +117,6 @@ WEB_SEARCH_MODE=smart
 │  4. 格式转换（Firecrawl → Anthropic）│
 │     - 生成 encrypted_content       │
 │     - 构建 web_search_tool_result  │
-│     - 缓存结果（用于后续 fetch）   │
 │  5. 流式返回搜索结果               │
 │     - server_tool_use 块            │
 │     - web_search_tool_result 块     │
@@ -233,7 +231,7 @@ WEB_SEARCH_MODE=smart
 **智能模式处理流程**：
 1. 执行简单模式的搜索步骤
 2. 构建增强上下文，将搜索结果作为背景信息
-3. 调用上游 API（OpenAI/DeepSeek等）进行分析
+3. 调用现在用的上游 API进行分析
 4. 返回搜索结果 + LLM 智能分析
 
 **核心方法**：
@@ -252,12 +250,12 @@ WEB_SEARCH_MODE=smart
 
 **核心接口**：
 - `search()`: 执行网络搜索，支持查询词、结果数量限制、位置参数、抓取选项配置
-- `scrape()`: 抓取单个 URL 内容，支持格式选择（markdown/html）、缓存控制、位置设置
+- `scrape()`: 抓取单个 URL 内容，支持格式选择（markdown/html）、位置设置
 - `batchScrape()`: 批量抓取多个 URL，支持轮询间隔和超时配置
 
 **参数说明**：
 - SearchParams: 包含 query（查询词）、limit（结果数量）、location（地理位置）、scrape_options（抓取选项，如格式要求）
-- ScrapeParams: 包含 url、formats（输出格式）、maxAge（缓存时间）、location（位置信息）
+- ScrapeParams: 包含 url、formats（输出格式）、location（位置信息）
 - BatchScrapeParams: 包含 urls（URL 列表）、formats、pollInterval（轮询间隔）、waitTimeout（等待超时）
 
 **错误处理**：
@@ -280,7 +278,6 @@ WEB_SEARCH_MODE=smart
   - 遍历 Firecrawl 返回的搜索结果列表
   - 为每个结果生成唯一的 `encrypted_content`（使用 UUID + base64 编码）
   - 构建 `web_search_result` 对象，包含 url、title、encrypted_content、page_age
-  - 将完整内容缓存，以供后续引用
 
 - `convertScrapeResult()`: 将 Firecrawl 抓取结果转换为 `web_fetch_tool_result` 格式
   - 提取 markdown 或 html 内容
@@ -480,14 +477,6 @@ WEB_SEARCH_MODE=smart
 - 第二轮：使用 web_fetch 获取第一个搜索结果的 URL 内容
 - 验证：第二轮请求能成功获取内容，因为 URL 已在第一轮出现
 
-**测试 3: PDF 处理**
-- 请求格式：包含 `web_fetch_20250910` tool
-- 用户消息："Summarize this PDF: https://example.com/paper.pdf"
-- 期望响应：
-  - document.source.media_type 为 "application/pdf"
-  - document.source.type 为 "base64"
-  - document.source.data 包含 base64 编码的 PDF 内容
-
 ---
 
 ### 阶段 4: 流式响应优化 (1-2 天)
@@ -536,7 +525,6 @@ WEB_SEARCH_MODE=smart
   - 测试多轮对话
 
 - [ ] **5.3 性能优化**
-  - 优化缓存策略
   - 减少不必要的 API 调用
   - 优化内存使用
   - 压力测试

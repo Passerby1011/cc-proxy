@@ -219,6 +219,16 @@ export async function forwardRequest(
             input: event.call.arguments,
           });
           outputBuffer += JSON.stringify(event.call.arguments);
+        } else if (event.type === "tool_call_failed") {
+          // 工具调用失败时，将原始内容作为文本返回，并添加提示
+          const failedText = event.rawContent || "";
+          const note = "Model did not use tool, may not support or chose not to use";
+          const fullText = failedText ? `${failedText}\n\n[${note}]` : `[${note}]`;
+          contentBlocks.push({
+            type: "text",
+            text: fullText
+          });
+          outputBuffer += fullText;
         }
       }
 
@@ -242,11 +252,84 @@ export async function forwardRequest(
       };
     } else {
       // Anthropic 非流式
-      // 确保返回的模型名是原始请求的
-      if (json && typeof json === 'object') {
-        json.model = request.model;
+      // 需要解析 content 中的工具调用分隔符
+      const message = json;
+
+      // 如果没有 content 或 content 为空，直接返回
+      if (!message.content || !Array.isArray(message.content) || message.content.length === 0) {
+        if (json && typeof json === 'object') {
+          json.model = request.model;
+        }
+        return json;
       }
-      return json;
+
+      const parser = new ToolifyParser(delimiter, thinkingEnabled);
+      const contentBlocks: any[] = [];
+      let outputBuffer = "";
+
+      // 处理每个 content block
+      for (const block of message.content) {
+        if (block.type === "text") {
+          // 解析文本中的工具调用分隔符
+          for (const char of block.text) {
+            parser.feedChar(char);
+          }
+        } else {
+          // 非文本块直接保留（如原生 tool_use）
+          contentBlocks.push(block);
+        }
+      }
+
+      parser.finish();
+      const events = parser.consumeEvents();
+
+      // 处理解析出的事件
+      for (const event of events) {
+        if (event.type === "text") {
+          contentBlocks.push({ type: "text", text: event.content });
+          outputBuffer += event.content;
+        } else if (event.type === "thinking") {
+          contentBlocks.push({ type: "thinking", thinking: event.content });
+          outputBuffer += event.content;
+        } else if (event.type === "tool_call") {
+          contentBlocks.push({
+            type: "tool_use",
+            id: `toolu_${crypto.randomUUID().split("-")[0]}`,
+            name: event.call.name,
+            input: event.call.arguments,
+          });
+          outputBuffer += JSON.stringify(event.call.arguments);
+        } else if (event.type === "tool_call_failed") {
+          // 工具调用失败时，将原始内容作为文本返回，并添加提示
+          const failedText = event.rawContent || "";
+          const note = "Model did not use tool, may not support or chose not to use";
+          const fullText = failedText ? `${failedText}\n\n[${note}]` : `[${note}]`;
+          contentBlocks.push({
+            type: "text",
+            text: fullText
+          });
+          outputBuffer += fullText;
+        }
+      }
+
+      // 精确重新计算输出 Token
+      const outputTokens = countTokensWithTiktoken(outputBuffer, request.model);
+
+      return {
+        id: message.id || `msg-${requestId}`,
+        type: "message",
+        role: "assistant",
+        model: request.model, // 确保返回原始模型名
+        content: contentBlocks.length > 0 ? contentBlocks : [{ type: "text", text: "" }],
+        stop_reason: contentBlocks.some((b) => b.type === "tool_use")
+          ? "tool_use"
+          : (message.stop_reason || "end_turn"),
+        stop_sequence: message.stop_sequence || null,
+        usage: {
+          input_tokens: message.usage?.input_tokens ?? inputTokens,
+          output_tokens: outputTokens || (message.usage?.output_tokens ?? 0),
+        },
+      };
     }
   }
 }

@@ -1,7 +1,7 @@
 import { log, logPhase, LogPhase } from "./logging.ts";
 import { ToolCallDelimiter } from "./signals.ts";
 import { ParsedInvokeCall, ClaudeRequest } from "./types.ts";
-import { ProxyConfig } from "./config.ts";
+import { ProxyConfig, resolveAutoTrigger } from "./config.ts";
 import { ToolifyParser } from "./parser.ts";
 
 export class ToolCallRetryHandler {
@@ -265,10 +265,17 @@ Your response should contain ONLY the tool call block, nothing else.`;
   }
 
   private buildRequestBody(messages: any[]): any {
-    // 🔑 解析模型名：支持 "channel+model" 格式，重试时应使用实际模型名
+    // 🔑 解析模型名：使用 resolveAutoTrigger 正确处理 cc+/chat+ 前缀和 channel+model 格式
     const modelName = this.originalRequest.model;
-    const plusIndex = modelName.indexOf("+");
-    const actualModel = plusIndex !== -1 ? modelName.slice(plusIndex + 1) : modelName;
+    const { actualModelName } = resolveAutoTrigger(
+      modelName,
+      this.config.channelConfigs,
+      this.config.webTools?.autoTrigger ?? true
+    );
+
+    // 🔑 从 actualModelName 中提取真正的模型名（去掉 channel+ 部分）
+    const plusIndex = actualModelName.indexOf("+");
+    const actualModel = plusIndex !== -1 ? actualModelName.slice(plusIndex + 1) : actualModelName;
 
     // 🔑 使用实际的模型和协议，改用流式
     if (this.protocol === "anthropic") {

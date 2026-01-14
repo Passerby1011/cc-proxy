@@ -314,6 +314,7 @@ Your response should contain ONLY the tool call block, nothing else.`;
     content: string,
     delimiter: ToolCallDelimiter
   ): ParsedInvokeCall | null {
+    const requestId = this.context.getRequestId();
     const m = delimiter.getMarkers();
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

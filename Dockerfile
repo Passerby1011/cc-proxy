@@ -38,4 +38,4 @@ ENV HOST=0.0.0.0 \
 USER app
 
 # 运行主进程时仅授予必要权限
-CMD ["run", "--allow-net", "--allow-env", "--allow-read=.", "--allow-write=logs", "--allow-write=config.json", "src/main.ts"]
+CMD ["run", "--allow-net", "--allow-env", "--allow-read=.", "--allow-write=/app", "src/main.ts"]

@@ -7,6 +7,7 @@ import { ToolCallDelimiter } from "./signals.ts";
 import { ToolCallRetryHandler } from "./tool_retry.ts";
 import { ClaudeRequest } from "./types.ts";
 import { ParsedToolInterceptor } from "./tools/parsed_tool_interceptor.ts";
+import { RequestContext } from "./ai_client/mod.ts";
 
 export async function handleAnthropicStream(
   response: Response,
@@ -20,7 +21,8 @@ export async function handleAnthropicStream(
   upstreamUrl = "",
   upstreamHeaders: Record<string, string> = {},
   protocol: "openai" | "anthropic" = "anthropic",
-  clientApiKey?: string, // 新增：客户端 API Key
+  clientApiKey?: string,
+  context?: RequestContext, // 新增：RequestContext（可选，用于按需拦截模式）
 ) {
   const model = originalRequest?.model || "claude-3-5-sonnet-20241022";
   const parser = new ToolifyParser(delimiter, thinkingEnabled, requestId);
@@ -32,10 +34,11 @@ export async function handleAnthropicStream(
     config.firecrawl &&
     config.webTools &&
     (config.webTools.enableSearchIntercept || config.webTools.enableFetchIntercept) &&
-    originalRequest
+    originalRequest &&
+    context // 需要 context 才能使用拦截器
   ) {
-    // 解析模型名并确定 autoTrigger 配置（考虑前缀、渠道、全局配置）
-    const { autoTrigger: resolvedAutoTrigger, actualModelName } = resolveAutoTrigger(
+    // 解析模型名并确定 autoTrigger 配置
+    const { autoTrigger: resolvedAutoTrigger } = resolveAutoTrigger(
       originalRequest.model,
       config.channelConfigs,
       config.webTools.autoTrigger
@@ -43,55 +46,13 @@ export async function handleAnthropicStream(
 
     // 只有非自动触发模式才使用拦截器
     if (!resolvedAutoTrigger) {
-      // 解析上游信息（使用解析后的模型名）
-      const modelName = actualModelName;
-      const plusIndex = modelName.indexOf("+");
-      let upstreamBaseUrl: string;
-      let upstreamApiKey: string | undefined;
-      let upstreamModel: string;
-      let upstreamProtocol: "openai" | "anthropic";
-
-      if (plusIndex !== -1) {
-        const channelName = modelName.slice(0, plusIndex);
-        const actualModel = modelName.slice(plusIndex + 1);
-        const channel = config.channelConfigs.find((c) => c.name === channelName);
-
-        if (channel) {
-          upstreamBaseUrl = channel.baseUrl;
-          upstreamApiKey = channel.apiKey;
-          upstreamModel = actualModel;
-          upstreamProtocol = channel.protocol ?? config.defaultProtocol;
-        } else {
-          upstreamBaseUrl = config.upstreamBaseUrl!;
-          upstreamApiKey = config.upstreamApiKey;
-          upstreamModel = modelName;
-          upstreamProtocol = config.defaultProtocol;
-        }
-      } else {
-        if (config.channelConfigs.length > 0) {
-          const channel = config.channelConfigs[0];
-          upstreamBaseUrl = channel.baseUrl;
-          upstreamApiKey = channel.apiKey;
-          upstreamModel = modelName;
-          upstreamProtocol = channel.protocol ?? config.defaultProtocol;
-        } else {
-          upstreamBaseUrl = config.upstreamBaseUrl!;
-          upstreamApiKey = config.upstreamApiKey;
-          upstreamModel = config.upstreamModelOverride ?? modelName;
-          upstreamProtocol = config.defaultProtocol;
-        }
-      }
-
-      // 如果启用了透传 API key，则优先使用客户端提供的 key
-      if (config.passthroughApiKey && clientApiKey) {
-        upstreamApiKey = clientApiKey;
-      }
-
+      // 使用 RequestContext 中已解析的上游信息
+      const upstreamConfig = context.getUpstreamConfig();
       const upstreamInfo = {
-        baseUrl: upstreamBaseUrl,
-        apiKey: upstreamApiKey,
-        model: upstreamModel,
-        protocol: upstreamProtocol,
+        baseUrl: upstreamConfig.baseUrl,
+        apiKey: upstreamConfig.apiKey,
+        model: upstreamConfig.model,
+        protocol: upstreamConfig.protocol as "openai" | "anthropic",
       };
 
       const parsedInterceptor = new ParsedToolInterceptor(
@@ -138,14 +99,13 @@ export async function handleAnthropicStream(
 
     // 重试循环
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const retryHandler = new ToolCallRetryHandler(
-        config,
-        requestId,
-        originalRequest,
-        upstreamUrl,
-        upstreamHeaders,
-        protocol
-      );
+      // 如果没有 context，无法进行重试
+      if (!context) {
+        log("error", "Cannot retry without RequestContext", { requestId });
+        break;
+      }
+
+      const retryHandler = new ToolCallRetryHandler(context);
 
       const retryResult = await retryHandler.retry(
         failed.content,

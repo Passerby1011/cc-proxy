@@ -9,6 +9,7 @@ import { countTokens } from "./token_counter.ts";
 import { AdminService } from "./admin_service.ts";
 import { ToolInterceptor } from "./tools/tool_interceptor.ts";
 import { StreamResponseWriter } from "./tools/stream_response_writer.ts";
+import { RequestContext } from "./ai_client/mod.ts";
 
 const initialConfig = loadConfig();
 const adminService = new AdminService(initialConfig);
@@ -95,14 +96,18 @@ async function handleMessages(req: Request, requestId: string) {
       ? rawClientKey
       : undefined;
 
-    // 判断是否为流式请求：Anthropic 默认为非流式，仅当显式设为 true 时才流式
-    const isStream = body.stream === true;
-
-    // 检查是否需要拦截 Web Search/Fetch 工具调用
-    const shouldInterceptTools = ToolInterceptor.shouldIntercept(
-      body.tools,
-      config.webTools,
+    // ============ 新架构：创建 RequestContext ============
+    // 在请求入口处创建 RequestContext，封装所有参数解析逻辑
+    const context = RequestContext.fromRequest(
+      body,
+      config,
+      requestId,
+      clientApiKey,
     );
+
+    // 从上下文获取解析后的信息
+    const upstreamConfig = context.getUpstreamConfig();
+    const isStream = body.stream === true;
 
     // 解析模型名并确定 autoTrigger 配置和渠道名（处理 cc+/chat+ 前缀）
     const { autoTrigger: resolvedAutoTrigger, actualModelName, channelName } = resolveAutoTrigger(
@@ -120,59 +125,20 @@ async function handleMessages(req: Request, requestId: string) {
       autoTrigger: resolvedAutoTrigger,
     });
 
+    // 检查是否需要拦截 Web Search/Fetch 工具调用
+    const shouldInterceptTools = ToolInterceptor.shouldIntercept(
+      body.tools,
+      config.webTools,
+    );
+
     // 只有在自动触发模式下才使用提前拦截逻辑
     if (shouldInterceptTools && config.firecrawl && config.webTools && resolvedAutoTrigger) {
-      // 在拦截前先解析渠道信息，以便智能模式使用（使用解析后的模型名）
-      let upstreamBaseUrl: string;
-      let upstreamApiKey: string | undefined;
-      let upstreamModel: string;
-      let upstreamProtocol: "openai" | "anthropic";
-
-      const modelName = actualModelName;
-      const plusIndex = modelName.indexOf("+");
-
-      if (plusIndex !== -1) {
-        const channelName = modelName.slice(0, plusIndex);
-        const actualModel = modelName.slice(plusIndex + 1);
-        const channel = config.channelConfigs.find((c) => c.name === channelName);
-
-        if (channel) {
-          upstreamBaseUrl = channel.baseUrl;
-          upstreamApiKey = channel.apiKey;
-          upstreamModel = actualModel;
-          upstreamProtocol = channel.protocol ?? config.defaultProtocol;
-        } else {
-          upstreamBaseUrl = config.upstreamBaseUrl!;
-          upstreamApiKey = config.upstreamApiKey;
-          upstreamModel = modelName;
-          upstreamProtocol = config.defaultProtocol;
-        }
-      } else {
-        if (config.channelConfigs.length > 0) {
-          const channel = config.channelConfigs[0];
-          upstreamBaseUrl = channel.baseUrl;
-          upstreamApiKey = channel.apiKey;
-          upstreamModel = modelName;
-          upstreamProtocol = channel.protocol ?? config.defaultProtocol;
-        } else {
-          upstreamBaseUrl = config.upstreamBaseUrl!;
-          upstreamApiKey = config.upstreamApiKey;
-          upstreamModel = config.upstreamModelOverride ?? modelName;
-          upstreamProtocol = config.defaultProtocol;
-        }
-      }
-
-      // 如果启用了透传 API key，则优先使用客户端提供的 key（无视渠道密钥）
-      if (config.passthroughApiKey && rawClientKey) {
-        upstreamApiKey = rawClientKey;
-      }
-
-      // 构建上游信息对象
+      // 使用 RequestContext 中已解析的上游信息
       const upstreamInfo = {
-        baseUrl: upstreamBaseUrl,
-        apiKey: upstreamApiKey,
-        model: upstreamModel,
-        protocol: upstreamProtocol,
+        baseUrl: upstreamConfig.baseUrl,
+        apiKey: upstreamConfig.apiKey,
+        model: upstreamConfig.model,
+        protocol: upstreamConfig.protocol as "openai" | "anthropic",
       };
 
       // 拦截工具调用
@@ -204,7 +170,7 @@ async function handleMessages(req: Request, requestId: string) {
             deepBrowseCount: isSmartMode && deepBrowseEnabled ? config.webTools.deepBrowseCount : 0,
             stream: isStream,
             upstream: `${upstreamInfo.protocol}://${upstreamInfo.model}`,
-            channel: modelName.includes("+") ? modelName.split("+")[0] : "default",
+            channel: actualModelName.includes("+") ? actualModelName.split("+")[0] : "default",
           });
 
           if (isStream) {
@@ -382,7 +348,7 @@ async function handleMessages(req: Request, requestId: string) {
             stream: isStream,
             url: url.substring(0, 100),
             upstream: `${upstreamInfo.protocol}://${upstreamInfo.model}`,
-            channel: modelName.includes("+") ? modelName.split("+")[0] : "default",
+            channel: actualModelName.includes("+") ? actualModelName.split("+")[0] : "default",
           });
 
           if (isStream) {
@@ -491,8 +457,8 @@ async function handleMessages(req: Request, requestId: string) {
           }, 5000); // 每 5 秒发送心跳
 
           try {
-            // 调用统一的转发逻辑，传入 abort signal
-            const result = await forwardRequest(body, writer, config, requestId, clientApiKey, abortController.signal);
+            // 调用统一的转发逻辑，传入 RequestContext 和 abort signal
+            const result = await forwardRequest(context, writer, abortController.signal);
             
             // 计算耗时和统计
             const duration = Date.now() - startTime;
@@ -547,8 +513,8 @@ async function handleMessages(req: Request, requestId: string) {
     } else {
       // 非流式请求：直接等待 forwardRequest 完成并返回 JSON
       try {
-        // forwardRequest 需要改造以支持非流式返回数据
-        const result = await forwardRequest(body, undefined, config, requestId, clientApiKey);
+        // forwardRequest 使用 RequestContext
+        const result = await forwardRequest(context, undefined);
         const duration = Date.now() - startTime;
         logRequestComplete(requestId, {
           duration,

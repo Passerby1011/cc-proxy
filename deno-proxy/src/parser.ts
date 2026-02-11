@@ -47,21 +47,16 @@ export class ToolifyParser {
       return group1; // 如果匹配到的是双引号块，保持原样
     });
 
-    // 4. 🔑 处理最头疼的“字段内部未转义的双引号” (Case 1 & 2)
-    // 策略：寻找那些夹在汉字、字母、数字、标点符号中间，且前后不是 JSON 结构符号的孤立双引号
-    fixed = fixed.replace(/([^\{\}\[\]\s:,])"([^\{\}\[\]\s:,])/g, '$1\\"$2');
+    // 注意：已移除规则 4（处理未转义双引号）和规则 5（补全属性名）
+    // 因为这些规则可能误修复工具参数中的结构化文本内容
 
-    // 5. 补全裸奔的属性名 (Unquoted Keys)
-    // 匹配类似 { name: "val" } 或 , age: 30 这种 key 没加引号的情况
-    fixed = fixed.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
-
-    // 6. 还原被错误包裹的布尔值、数字和 null
+    // 4. 还原被错误包裹的布尔值、数字和 null
     // 将 "true" -> true, "false" -> false, "null" -> null
     fixed = fixed.replace(/:[ \t]*"(true|false|null)"/gi, (match, val) => {
       return `: ${val.toLowerCase()}`;
     });
 
-    // 1. 括号自动补全 (针对截断的情况)
+    // 5. 括号自动补全 (针对截断的情况)
     // 扫描整个字符串，计算括号平衡
     const stack: ("{" | "[")[] = [];
     for (let i = 0; i < fixed.length; i++) {
@@ -358,4 +353,3 @@ export class ToolifyParser {
     this.toolBuffer = "";
   }
 }
-

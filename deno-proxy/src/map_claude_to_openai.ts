@@ -28,14 +28,10 @@ export function mapClaudeToOpenAI(
   
   // 1. 处理 System Message
   if (body.system) {
-    let systemContent = "";
-    if (typeof body.system === "string") {
-      systemContent = body.system;
-    } else {
-      systemContent = body.system
-        .map((block) => (block.type === "text" ? block.text : ""))
-        .join("\n");
-    }
+    // system 现在统一为 ContentBlock[] 格式
+    const systemContent = body.system
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("\n");
     messages.push({ role: "system", content: systemContent });
   }
 

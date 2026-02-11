@@ -1,0 +1,872 @@
+# Web Search & Web Fetch 集成升级计划
+
+> 本文档描述了在 cc-proxy 中集成 Firecrawl 以实现 Anthropic Web Search 和 Web Fetch 功能替代的详细计划
+> **更新日期**: 2026-01-09 (基于技术讨论更新)
+> **配套文档**: [技术资料文档](./web-search-fetch-integration-research.md)
+
+## 一、项目概述
+
+### 1.1 目标
+
+在 cc-proxy 中集成 Firecrawl API,实现对 Anthropic 官方 Web Search 和 Web Fetch 功能的完全替代,使得不支持这两个功能的上游 API也能通过 cc-proxy 获得网络搜索和内容获取能力。
+
+### 1.2 核心价值
+
+1. **功能补齐**: 为不支持 web search/fetch 的 API 提供商提供这些高级功能
+2. **成本优化**: 使用 Firecrawl 替代 Anthropic 官方服务,可能降低使用成本
+3. **灵活控制**: 在 proxy 层面控制搜索和抓取行为,便于审计和限制
+4. **透明接入**: 客户端(如 Claude Code)无需任何修改,完全透明
+
+### 1.3 可行性评估
+
+**✅ 技术可行**:
+- Firecrawl 提供了完整的搜索和抓取能力
+- API 响应格式可以通过转换层适配 Anthropic 格式
+- deno-proxy 已有处理 tool use 的基础架构
+
+**⚠️ 主要挑战**:
+1. 响应格式差异需要转换层适配
+2. Anthropic 的 `encrypted_content` 需要模拟实现(使用不透明标识符)
+3. 流式响应需要处理 Firecrawl 的调用延迟
+4. 需要在"简单返回搜索结果"和"生成智能回答"之间做权衡
+
+**💰 成本考量**:
+- Anthropic Web Search: $10/1000次 + token成本
+- Firecrawl Search: 2 credits/10结果 + 抓取成本
+- 混合模式可能增加上游 API token 成本(如启用智能回答)
+- 需要根据实际使用评估成本效益
+
+### 1.4 工作流程理解
+
+**关键认知**: Anthropic Web Search 是 **Server-Side Tool**,工作流程如下:
+
+```
+客户端请求 → Anthropic API → Claude 决定搜索
+  → Anthropic 服务器执行搜索 → 搜索结果注入 Claude 上下文
+  → Claude 基于结果生成回答 → 一次性返回(搜索结果 + 回答)
+```
+
+**cc-proxy 的挑战**:
+- 上游 API不支持 server-side tool
+- 需要在代理层拦截并实现搜索逻辑
+- 有两种策略可选:
+  1. **简单模式**: 只返回搜索结果(快速、简单)
+  2. **智能模式**: 返回搜索结果 + 基于结果的回答(需额外的上游调用)
+
+### 1.5 工作模式设计(推荐方案)
+
+基于技术讨论,我们采用**可配置的工作模式**,通过环境变量控制:
+
+| 模式 | 流程 | 优点 | 缺点 | 适用场景 |
+|------|------|------|------|---------|
+| **简单模式** (默认) | Firecrawl 搜索 → 直接返回搜索结果 | 快速、简单、成本低、无二次请求 | 只返回搜索链接 | 大多数场景 |
+| **智能模式** (可选) | Firecrawl 搜索 → 上游 API 分析 → 返回结果+智能回答 | 提供深度分析和总结 | 需二次请求、增加延迟和成本 | 需要深度分析的场景 |
+
+**核心设计决策**:
+
+**默认使用简单模式的理由**:
+1. ✅ **符合 Anthropic 原生行为**: Web Search 本质上返回搜索结果,而非搜索引擎
+2. ✅ **客户端工作流完整**: 客户端可以基于搜索结果自主决定是否使用 Web Fetch 深入了解
+3. ✅ **避免不必要的复杂性**: 不需要二次请求,减少失败点
+4. ✅ **降低延迟和成本**: 一次 Firecrawl 调用即可,无上游 API token 消耗
+5. ✅ **代理职责清晰**: cc-proxy 专注于格式转换和协议适配,不做内容加工
+
+**智能模式的使用场景**:
+- 需要 LLM 理解和总结搜索结果
+- 追求极致的用户体验(类似 Anthropic 原生完整响应)
+- 可以接受额外的延迟和成本
+
+**配置方式**:
+```bash
+# 简单模式(默认)
+WEB_SEARCH_MODE=simple
+
+# 智能模式(需二次请求)
+WEB_SEARCH_MODE=smart
+```
+
+---
+
+## 二、技术架构设计
+
+### 2.1 整体架构
+
+#### 2.1.1 简单模式架构（默认，推荐）
+
+```
+┌─────────────┐
+│ Claude Code │ (客户端)
+└──────┬──────┘
+       │ POST /v1/messages
+       │ {tools: [{type: "web_search_20250305"}]}
+       ↓
+┌─────────────────────────────────────┐
+│         cc-proxy (deno-proxy)       │
+│                                     │
+│  1. 检测到 web_search tool          │
+│  2. 提取用户问题                    │
+│  3. 构建搜索查询（简单启发式）      │
+│     ↓                               │
+│  ┌─────────────────────────────┐   │
+│  │  调用 Firecrawl Search API  │   │
+│  │  - query: 提取的关键词      │   │
+│  │  - limit: 5                 │   │
+│  │  - scrape: markdown         │   │
+│  └─────────────────────────────┘   │
+│     ↓                               │
+│  4. 格式转换（Firecrawl → Anthropic）│
+│     - 生成 encrypted_content       │
+│     - 构建 web_search_tool_result  │
+│  5. 流式返回搜索结果               │
+│     - server_tool_use 块            │
+│     - web_search_tool_result 块     │
+│                                     │
+└─────────────────────────────────────┘
+       │
+       ↓
+┌──────────────┐
+│  Firecrawl   │
+│     API      │
+└──────────────┘
+
+响应示例：
+{
+  "content": [
+    {
+      "type": "server_tool_use",
+      "name": "web_search",
+      "input": {"query": "Firecrawl"}
+    },
+    {
+      "type": "web_search_tool_result",
+      "content": [
+        {
+          "url": "https://firecrawl.dev",
+          "title": "Firecrawl",
+          "encrypted_content": "..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+**特点**：
+- ✅ 一次 Firecrawl 调用
+- ✅ 直接返回搜索结果
+- ✅ 客户端可自主决定是否 web fetch
+- ✅ 简单、快速、低成本
+
+#### 2.1.2 智能模式架构（可选）
+
+```
+┌─────────────┐
+│ Claude Code │
+└──────┬──────┘
+       │ POST /v1/messages
+       ↓
+┌─────────────────────────────────────┐
+│         cc-proxy (deno-proxy)       │
+│                                     │
+│  1. 检测到 web_search tool          │
+│     ↓                               │
+│  2. 第一次上游调用（可选）          │
+│     提取精确搜索词                  │
+│     ↓                               │
+│  3. 调用 Firecrawl Search           │
+│     ↓                               │
+│  4. 第二次上游调用                  │
+│     - 构建增强上下文                │
+│     - 让 LLM 分析搜索结果           │
+│     ↓                               │
+│  5. 返回：搜索结果 + 智能回答       │
+│                                     │
+└─────────────────────────────────────┘
+       │             │
+       ↓             ↓
+┌─────────────┐  ┌──────────────┐
+│ 上游 API    │  │  Firecrawl   │
+│ (OpenAI等)  │  │     API      │
+└─────────────┘  └──────────────┘
+
+响应示例：
+{
+  "content": [
+    {
+      "type": "web_search_tool_result",
+      "content": [...]  // 搜索结果
+    },
+    {
+      "type": "text",
+      "text": "根据搜索结果，Firecrawl 是..."  // LLM 分析
+    }
+  ]
+}
+```
+
+**特点**：
+- ⚠️ 需要 1-2 次上游 API 调用
+- ✅ 提供智能分析和总结
+- ✅ 更接近 Anthropic 原生体验
+- ❌ 增加延迟和成本
+
+### 2.2 核心模块设计
+
+#### 2.2.1 Tool 拦截器 (tool_interceptor.ts)
+
+**模块职责**：
+- 检测请求中是否包含 `web_search_20250305` 或 `web_fetch_20250910` tool
+- 根据配置选择简单模式或智能模式进行处理
+- 提取用户问题并生成搜索查询
+- 调用 Firecrawl API 获取结果
+- 将结果转换为 Anthropic 格式并返回
+
+**简单模式处理流程**：
+1. 从请求消息中提取用户问题
+2. 使用正则表达式简单提取关键词（移除停用词如 "what is", "how", "why" 等）
+3. 调用 Firecrawl Search API，传入查询词和限制数量
+4. 将 Firecrawl 响应转换为 Anthropic 格式
+5. 构建并返回 Anthropic 响应，包含 `server_tool_use` 和 `web_search_tool_result` 块
+
+**智能模式处理流程**：
+1. 执行简单模式的搜索步骤
+2. 构建增强上下文，将搜索结果作为背景信息
+3. 调用现在用的上游 API进行分析
+4. 返回搜索结果 + LLM 智能分析
+
+**核心方法**：
+- `shouldIntercept()`: 检查请求是否需要拦截
+- `handleSimpleMode()`: 处理简单模式请求
+- `handleSmartMode()`: 处理智能模式请求
+- `extractKeywords()`: 简单关键词提取，限制长度为 200 字符
+
+#### 2.2.2 Firecrawl 客户端 (firecrawl_client.ts)
+
+**模块职责**：
+- 封装 Firecrawl API 调用逻辑
+- 处理 API 认证和请求构建
+- 实现错误处理和重试机制
+- 支持超时控制
+
+**核心接口**：
+- `search()`: 执行网络搜索，支持查询词、结果数量限制、位置参数、抓取选项配置
+- `scrape()`: 抓取单个 URL 内容，支持格式选择（markdown/html）、位置设置
+- `batchScrape()`: 批量抓取多个 URL，支持轮询间隔和超时配置
+
+**参数说明**：
+- SearchParams: 包含 query（查询词）、limit（结果数量）、location（地理位置）、scrape_options（抓取选项，如格式要求）
+- ScrapeParams: 包含 url、formats（输出格式）、location（位置信息）
+- BatchScrapeParams: 包含 urls（URL 列表）、formats、pollInterval（轮询间隔）、waitTimeout（等待超时）
+
+**错误处理**：
+- API 密钥验证失败
+- 速率限制（429 错误）
+- 网络超时
+- 无效的请求参数
+- 服务不可用（5xx 错误）
+
+#### 2.2.3 格式转换器 (format_converter.ts)
+
+**模块职责**：
+- 将 Firecrawl 的响应格式转换为 Anthropic 的标准格式
+- 生成 `encrypted_content` 和 `encrypted_index` 标识符
+- 构建引用信息（citations）
+- 处理不同内容类型（文本、PDF）
+
+**核心功能**：
+- `convertSearchResult()`: 将 Firecrawl 搜索结果转换为 `web_search_tool_result` 格式
+  - 遍历 Firecrawl 返回的搜索结果列表
+  - 为每个结果生成唯一的 `encrypted_content`（使用 UUID + base64 编码）
+  - 构建 `web_search_result` 对象，包含 url、title、encrypted_content、page_age
+
+- `convertScrapeResult()`: 将 Firecrawl 抓取结果转换为 `web_fetch_tool_result` 格式
+  - 提取 markdown 或 html 内容
+  - 构建 document 块结构
+  - 处理 PDF 时使用 base64 编码
+  - 添加元数据（title、retrieved_at 等）
+
+- `buildCitations()`: 构建引用信息
+  - 从内容中提取被引用的文本片段
+  - 为每个引用生成 `encrypted_index`
+  - 构建 `web_search_result_location` 或 `char_location` 对象
+  - 包含 url、title、cited_text 等信息
+
+- `generateEncryptedContent()`: 生成加密内容标识
+  - 使用 crypto.randomUUID() 生成唯一 ID
+  - 将 ID、URL、内容预览打包为 JSON
+  - 使用 btoa() 进行 base64 编码
+  - 返回不透明标识符字符串
+
+**数据结构映射**：
+- Firecrawl `data.web[]` → Anthropic `web_search_result[]`
+- Firecrawl `markdown/html` → Anthropic `document.source.data`
+- Firecrawl `title/url` → Anthropic `title/url`
+- 生成的 UUID → Anthropic `encrypted_content`
+
+---
+
+## 三、实施阶段
+
+### 阶段 1: 基础设施准备 (2-3 天)
+
+**目标**: 搭建 Firecrawl 集成的基础架构
+
+#### 任务清单:
+
+- [ ] **1.1 添加 Firecrawl 依赖**
+  - 在 `deno.json` 中添加 Firecrawl 相关依赖
+  - 创建 Firecrawl API 配置(API Key 等)
+  - 添加环境变量支持
+
+- [ ] **1.2 创建核心模块文件**
+  - `deno-proxy/src/tools/tool_interceptor.ts`
+  - `deno-proxy/src/tools/firecrawl_client.ts`
+  - `deno-proxy/src/tools/format_converter.ts`
+  - `deno-proxy/src/tools/types.ts` (类型定义)
+
+- [ ] **1.3 配置管理**
+  - 在 `config.ts` 中添加 Firecrawl 配置项
+  - 添加功能开关(是否启用 web search/fetch 拦截)
+
+#### 验证标准:
+- Firecrawl API 可以成功调用
+- 基础模块结构清晰,类型定义完整
+- 配置可以通过环境变量灵活控制
+
+---
+
+### 阶段 2: Web Search 功能实现（简单模式）(2-3 天)
+
+**目标**: 实现 Web Search 的基础拦截和格式转换（简单模式）
+
+#### 任务清单:
+
+- [ ] **2.1 请求拦截**
+  - 在请求处理流程中识别 `web_search_20250305` tool
+  - 提取 tool 定义中的参数(`max_uses`, `allowed_domains` 等)
+  - 提取用户问题文本
+
+- [ ] **2.2 简单关键词提取**
+  - 实现 `extractKeywords()` 方法（不调用 LLM）
+  - 使用正则表达式移除停用词
+  - 直接使用用户问题作为搜索查询
+
+- [ ] **2.3 Firecrawl Search 调用**
+  - 实现 `FirecrawlClient.search()` 方法
+  - 处理位置参数映射(`user_location` → `location`)
+  - 实现域名过滤逻辑(后处理过滤结果)
+  - 处理错误和重试逻辑
+
+- [ ] **2.4 响应格式转换**
+  - 实现 `convertSearchResult()` 方法
+  - 生成 `encrypted_content` (使用 UUID + base64)
+  - 构建 `web_search_tool_result` 结构
+  - **暂不实现** citations（可选功能）
+
+- [ ] **2.5 集成到主流程**
+  - 修改 `handle_anthropic_stream.ts`
+  - 在检测到 web_search tool 时调用拦截器
+  - 将结果注入到响应流中
+  - **暂不处理** `pause_turn` 场景（后续优化）
+
+#### 验证标准:
+- ✅ 能够拦截 web_search 请求并调用 Firecrawl
+- ✅ 响应格式符合 Anthropic 基本规范（包含 server_tool_use 和 web_search_tool_result）
+- ✅ 搜索结果正确返回（URL、标题、内容）
+- ⚠️ 暂不要求 citations 和多轮对话支持（后续优化）
+
+#### 测试用例:
+
+**测试 1: 基本搜索（最小可行）**
+- 请求格式：包含 `web_search_20250305` tool 的标准消息
+- 用户消息："What is Firecrawl?"
+- 期望响应：
+  - 包含 `server_tool_use` 块，name 为 "web_search"
+  - 包含 `web_search_tool_result` 块，内含搜索结果数组
+  - 每个结果包含 url、title、encrypted_content、page_age
+
+**测试 2: 带域名过滤的搜索（可选）**
+- 请求格式：同测试 1，但 tool 定义中包含 `allowed_domains: ["docs.firecrawl.dev"]`
+- 期望响应：
+  - 搜索结果只包含指定域名的 URL
+  - 其他域名的结果被过滤掉
+
+---
+
+### 阶段 2.5: 智能模式实现（可选）(1-2 天)
+
+**目标**: 实现智能模式，提供基于搜索结果的 LLM 分析
+
+**前置条件**: 阶段 2 完成并验证通过
+
+#### 任务清单:
+
+- [ ] **2.5.1 配置检测**
+  - 读取 `WEB_SEARCH_MODE` 环境变量
+  - 根据配置选择 simple 或 smart 模式
+
+- [ ] **2.5.2 实现 handleSmartMode()**
+  - 调用 Firecrawl 获取搜索结果
+  - 构建增强上下文（搜索结果作为上下文）
+  - 调用上游 API 生成分析
+  - 返回：搜索结果 + LLM 分析
+
+- [ ] **2.5.3 流式响应优化**
+  - 先流式输出搜索结果
+  - 再流式输出 LLM 分析
+  - 添加进度提示
+
+#### 验证标准:
+- ✅ 智能模式能正确调用上游 API
+- ✅ 返回包含搜索结果和分析
+- ✅ 流式响应流畅
+
+---
+
+### 阶段 3: Web Fetch 功能实现 (2-3 天)
+
+**目标**: 实现 Web Fetch 工具的完整拦截和转换
+
+#### 任务清单:
+
+- [ ] **3.1 请求拦截**
+  - 识别 `web_fetch_20250910` tool
+  - 提取 URL 和参数
+  - 实现 URL 验证逻辑(检查 URL 是否在对话历史中)
+
+- [ ] **3.2 Firecrawl Scrape 调用**
+  - 实现 `FirecrawlClient.scrape()` 方法
+  - 处理 `max_content_tokens` 限制
+  - 实现域名过滤
+  - 处理 PDF 和文本内容
+
+- [ ] **3.3 响应格式转换**
+  - 实现 `convertScrapeResult()` 方法
+  - 生成 `document` 块结构
+  - 处理 base64 编码(PDF)
+  - 实现可选的 citations 生成
+
+- [ ] **3.4 与 Web Search 联动**
+  - 从 Web Search 结果中提取 URL
+  - 自动将这些 URL 加入 Web Fetch 白名单
+  - 实现跨工具的上下文传递
+
+- [ ] **3.5 集成到主流程**
+  - 修改主处理流程,添加 web_fetch 拦截
+  - 实现流式响应
+  - 处理超时和错误
+
+#### 验证标准:
+- 能够拦截 web_fetch 请求并调用 Firecrawl
+- URL 验证正确工作
+- PDF 和文本内容正确处理
+- 与 web_search 联动正常
+
+#### 测试用例:
+
+**测试 1: 获取单个 URL**
+- 请求格式：包含 `web_fetch_20250910` tool 的标准消息
+- 用户消息："Please analyze https://docs.firecrawl.dev/features/scrape"
+- 期望响应：
+  - 包含 `server_tool_use` 块，name 为 "web_fetch"
+  - 包含 `web_fetch_tool_result` 块，内含 document 类型内容
+  - document 包含 source（文本或 base64）、title、citations 等
+
+**测试 2: Search + Fetch 组合**
+- 第一轮：搜索 "Firecrawl"，获取搜索结果列表
+- 第二轮：使用 web_fetch 获取第一个搜索结果的 URL 内容
+- 验证：第二轮请求能成功获取内容，因为 URL 已在第一轮出现
+
+---
+
+### 阶段 4: 流式响应优化 (1-2 天)
+
+**目标**: 优化 SSE 流式响应,提供更好的用户体验
+
+#### 任务清单:
+
+- [ ] **4.1 进度事件**
+  - 在 Firecrawl 请求期间发送进度事件
+  - 实现 `content_block_start`/`delta`/`stop` 事件序列
+  - 添加等待提示("Searching...", "Fetching...")
+
+- [ ] **4.2 流式内容传输**
+  - 如果 Firecrawl 结果很大,分块传输
+  - 实现 `pause_turn` 机制
+  - 优化内存使用
+
+- [ ] **4.3 错误处理**
+  - 在流中正确报告错误
+  - 实现优雅降级(Firecrawl 失败时的处理)
+  - 添加详细的错误日志
+
+#### 验证标准:
+- 流式响应流畅,无卡顿
+- 进度提示清晰
+- 错误能被正确捕获和报告
+
+---
+
+### 阶段 5: 测试与优化 (2-3 天)
+
+**目标**: 全面测试功能,优化性能和用户体验
+
+#### 任务清单:
+
+- [ ] **5.1 单元测试**
+  - 为每个模块编写单元测试
+  - 测试覆盖率 > 80%
+  - Mock Firecrawl API 响应
+
+- [ ] **5.2 集成测试**
+  - 端到端测试 Web Search 功能
+  - 端到端测试 Web Fetch 功能
+  - 测试 Search + Fetch 组合场景
+  - 测试多轮对话
+
+- [ ] **5.3 性能优化**
+  - 减少不必要的 API 调用
+  - 优化内存使用
+  - 压力测试
+
+- [ ] **5.4 边缘情况处理**
+  - 测试各种错误场景
+  - 测试超大响应
+  - 测试并发请求
+  - 测试网络超时
+
+- [ ] **5.5 文档更新**
+  - 更新 README
+  - 添加配置说明
+  - 添加使用示例
+  - 更新 API 文档
+
+#### 验证标准:
+- 所有测试通过
+- 无已知 bug
+- 性能满足要求
+- 文档完善
+
+---
+
+## 四、技术实现细节
+
+### 4.1 请求拦截逻辑
+
+**实现位置**：`deno-proxy/src/handle_anthropic_stream.ts`
+
+**拦截流程**：
+1. 在接收到 Anthropic API 请求时，检查 `tools` 数组
+2. 识别是否包含 `web_search_20250305` 或 `web_fetch_20250910` 类型的 tool
+3. 如果检测到需要拦截的 tool，创建对应的拦截器实例
+4. 根据 tool 类型调用相应的处理方法：
+   - `web_search_20250305` → WebSearchInterceptor.intercept()
+   - `web_fetch_20250910` → WebFetchInterceptor.intercept()
+5. 返回拦截器生成的 ToolResult，而不是转发到上游 API
+
+**关键决策点**：
+- 检查功能开关是否启用（ENABLE_WEB_SEARCH_INTERCEPT / ENABLE_WEB_FETCH_INTERCEPT）
+- 判断是否需要拦截（是否包含目标 tool 类型）
+- 选择简单模式或智能模式（根据 WEB_SEARCH_MODE 环境变量）
+
+### 4.2 格式转换详解
+
+**转换目标**：将 Firecrawl API 的响应格式转换为符合 Anthropic 规范的格式
+
+**Search Result 转换**：
+- **输入**：Firecrawl 返回的搜索结果，包含 data.web 数组，每项有 url、title、description、markdown 等字段
+- **处理步骤**：
+  1. 遍历 data.web 数组中的每个搜索结果
+  2. 为每个结果生成唯一的加密内容标识（使用 UUID）
+  3. 将标识和内容信息打包为 JSON 对象
+  4. 使用 base64 编码生成 encrypted_content
+  5. 构建 web_search_result 对象，包含必要字段
+- **输出**：Anthropic 格式的 web_search_tool_result，包含多个 web_search_result 项
+
+**Scrape Result 转换**：
+- **输入**：Firecrawl scrape 响应，包含 data.markdown、data.html、data.metadata 等
+- **处理步骤**：
+  1. 提取 markdown 或 html 内容
+  2. 构建 document 对象，设置 source.type 为 "text" 或 "base64"
+  3. 设置正确的 media_type（text/plain 或 application/pdf）
+  4. 从 metadata 中提取 title 和其他元信息
+  5. 添加 retrieved_at 时间戳
+- **输出**：Anthropic 格式的 web_fetch_tool_result
+
+**引用信息构建**：
+- 从搜索结果内容中提取关键文本片段（前 150 字符）
+- 为每个片段生成 encrypted_index
+- 构建 web_search_result_location 对象，包含 url、title、cited_text
+- 返回 Citation 数组
+
+### 4.3 SSE 流式输出处理
+
+**流式响应目标**：按照 Anthropic SSE 规范，逐步发送响应内容
+
+**事件序列**：
+1. **message_start**：发送消息开始事件
+2. **content_block_start**：开始发送 server_tool_use 块
+   - 设置 type 为 "server_tool_use"
+   - 设置 name 为 "web_search" 或 "web_fetch"
+   - 分配唯一的 tool use id
+3. **content_block_delta**：发送 tool 输入参数
+   - type 为 "input_json_delta"
+   - 包含 partial_json 字段（查询词或 URL）
+4. **content_block_stop**：结束 tool use 块
+5. **进度提示**（可选）：
+   - 发送 text 类型的 content_block
+   - 内容为 "Searching the web..." 或 "Fetching content..."
+6. **实际结果发送**：
+   - content_block_start：开始发送 tool_result 块
+   - content_block_delta：逐步发送搜索结果或抓取内容
+   - content_block_stop：结束 tool_result 块
+7. **message_delta**：发送使用统计信息
+8. **message_stop**：消息结束
+
+**大内容处理**：
+- 如果 Firecrawl 返回的内容很大（超过 10KB），分块传输
+- 使用多个 content_block_delta 事件逐步发送
+- 实现 pause_turn 机制，允许客户端暂停和继续
+
+**错误流式处理**：
+- 在流中发送 error 类型的事件
+- 包含 error_code 和 error_message
+- 优雅关闭流连接
+
+---
+
+## 五、配置管理
+
+### 5.1 环境变量
+
+**Firecrawl API 配置**：
+- `FIRECRAWL_API_KEY`: Firecrawl API 密钥（必填）
+- `FIRECRAWL_BASE_URL`: Firecrawl API 基础 URL（默认：https://api.firecrawl.dev/v2）
+
+**功能开关**：
+- `ENABLE_WEB_SEARCH_INTERCEPT`: 是否启用 Web Search 拦截（true/false，默认：false）
+- `ENABLE_WEB_FETCH_INTERCEPT`: 是否启用 Web Fetch 拦截（true/false，默认：false）
+
+**工作模式配置**：
+- `WEB_SEARCH_MODE`: Web Search 工作模式
+  - `simple`（默认）：只返回搜索结果，不生成智能回答
+  - `smart`：返回搜索结果 + LLM 智能分析（需二次请求）
+- `WEB_FETCH_MODE`: Web Fetch 工作模式
+  - `simple`（默认）：只返回抓取内容
+  - `smart`：返回内容 + LLM 分析（需二次请求）
+
+**性能配置**：
+- `FIRECRAWL_TIMEOUT`: Firecrawl API 请求超时时间（毫秒，默认：30000 即 30 秒）
+- `FIRECRAWL_MAX_RETRIES`: 最大重试次数（默认：3）
+- `FIRECRAWL_RETRY_DELAY`: 重试延迟（毫秒，默认：1000 即 1 秒）
+
+**限制配置**：
+- `MAX_SEARCH_RESULTS`: 最大搜索结果数量（默认：10）
+- `MAX_FETCH_CONTENT_TOKENS`: Web Fetch 内容最大 token 数（近似值，默认：100000）
+
+### 5.2 配置文件更新
+
+**文件位置**：`deno-proxy/src/config.ts`
+
+**需要添加的配置结构**：
+
+**FirecrawlConfig 接口**：
+- apiKey: string - API 密钥
+- baseUrl: string - API 基础 URL
+- timeout: number - 请求超时时间
+- maxRetries: number - 最大重试次数
+- retryDelay: number - 重试延迟
+
+**WebToolsConfig 接口**：
+- enableSearchIntercept: boolean - 是否启用搜索拦截
+- enableFetchIntercept: boolean - 是否启用抓取拦截
+- searchMode: 'simple' | 'smart' - 搜索工作模式
+- fetchMode: 'simple' | 'smart' - 抓取工作模式
+- limits 配置：
+  - maxSearchResults: number - 最大搜索结果数
+  - maxFetchContentTokens: number - 最大内容 token 数
+
+**配置导出**：
+- 从环境变量读取配置值
+- 提供合理的默认值
+- 导出 config 对象供其他模块使用
+
+---
+
+## 六、测试策略
+
+### 6.1 单元测试
+
+**测试文件位置**：`deno-proxy/tests/`
+
+**format_converter_test.ts - 格式转换器测试**：
+- 测试 `convertSearchResult()` 方法
+  - 输入：模拟的 Firecrawl 搜索结果
+  - 验证：转换后的结果类型为 `web_search_tool_result`
+  - 验证：tool_use_id 正确设置
+  - 验证：content 数组长度正确
+  - 验证：每个结果包含 url、title、encrypted_content
+
+- 测试 `convertScrapeResult()` 方法
+  - 输入：模拟的 Firecrawl 抓取结果
+  - 验证：转换后的结果类型为 `web_fetch_tool_result`
+  - 验证：document 结构正确
+  - 验证：source 字段包含正确的 media_type 和 data
+
+- 测试 `buildCitations()` 方法
+  - 输入：文本内容和来源信息
+  - 验证：返回的 citations 数组结构正确
+  - 验证：每个 citation 包含必要字段
+
+**firecrawl_client_test.ts - Firecrawl 客户端测试**：
+- Mock Firecrawl API 响应
+- 测试 search() 方法的参数传递
+- 测试 scrape() 方法的错误处理
+- 测试重试逻辑
+
+### 6.2 集成测试
+
+**web_search_integration_test.ts - Web Search 端到端测试**：
+
+**测试场景 1：基本搜索流程**
+- 创建包含 `web_search_20250305` tool 的模拟请求
+- 用户消息："What is Firecrawl?"
+- 发送 POST 请求到 `/v1/messages` 端点
+- 验证 HTTP 响应状态码为 200
+- 解析 SSE 流式响应
+- 验证响应包含 `content_block_start` 事件，类型为 `server_tool_use`
+- 验证响应包含 `web_search_tool_result` 块
+- 验证搜索结果包含 URL、标题和加密内容
+
+**测试场景 2：域名过滤**
+- 创建带 `allowed_domains` 参数的请求
+- 验证返回的搜索结果只包含允许的域名
+- 验证被阻止域名的结果已被过滤
+
+**web_fetch_integration_test.ts - Web Fetch 端到端测试**：
+
+**测试场景 1：抓取单个 URL**
+- 创建包含 `web_fetch_20250910` tool 的请求
+- 指定一个有效的 URL
+- 验证返回的 document 包含内容
+- 验证 retrieved_at 时间戳存在
+
+**测试场景 2：Search + Fetch 组合**
+- 第一次请求：使用 web_search
+- 第二次请求：使用 web_fetch 获取第一次搜索结果中的 URL
+- 验证第二次请求成功（URL 在对话历史中）
+
+**测试场景 3：PDF 处理**
+- 提供一个 PDF 文件的 URL
+- 验证返回的 media_type 为 "application/pdf"
+- 验证 source.type 为 "base64"
+- 验证 data 字段包含 base64 编码内容
+
+### 6.3 性能测试
+
+**performance_test.ts - 负载测试**：
+
+**并发搜索测试**：
+- 同时发送 10 个搜索请求
+- 测量开始和结束时间
+- 验证所有请求都成功返回
+- 计算平均响应时间
+- 断言平均响应时间 < 5 秒
+
+**内存使用测试**：
+- 连续执行 1000 次搜索
+- 监控内存使用情况
+- 验证没有明显的内存泄漏
+
+---
+
+
+### 7.2 日志设计
+
+**日志级别**：INFO、WARN、ERROR
+
+**搜索开始日志**（INFO）：
+- 事件："Web search intercepted"
+- 包含字段：
+  - toolUseId：工具使用 ID
+  - query：用户查询词
+  - maxUses：最大使用次数
+  - domains：允许/阻止的域名列表
+  - mode：工作模式（simple/smart）
+
+**Firecrawl API 调用日志**（INFO）：
+- 事件："Calling Firecrawl Search API" 或 "Calling Firecrawl Scrape API"
+- 包含字段：
+  - query/url：查询词或 URL
+  - limit：结果数量限制
+  - location：地理位置
+  - timeout：超时设置
+
+**Firecrawl API 响应日志**（INFO）：
+- 事件："Firecrawl Search completed" 或 "Firecrawl Scrape completed"
+- 包含字段：
+  - resultsCount：返回结果数量
+  - duration：耗时（毫秒）
+  - creditsUsed：消耗的 credits
+  - statusCode：HTTP 状态码
+
+**格式转换日志**（INFO）：
+- 事件："Converting search results" 或 "Converting scrape result"
+- 包含字段：
+  - inputFormat：输入格式（firecrawl）
+  - outputFormat：输出格式（anthropic）
+  - resultsCount：转换的结果数量
+  - duration：转换耗时
+
+**错误日志**（ERROR）：
+- 事件："Firecrawl API error" 或 "Format conversion error"
+- 包含字段：
+  - error：错误消息
+  - statusCode：HTTP 状态码（如适用）
+  - retryAfter：重试延迟（如适用）
+  - stack：错误堆栈跟踪
+  - context：错误上下文信息
+
+**警告日志**（WARN）：
+- Firecrawl API 响应慢（> 5 秒）
+- 重试次数达到上限
+- 搜索结果为空
+
+### 7.3 监控仪表板建议
+
+**实时监控面板**：
+1. 请求量趋势图（按分钟/小时）
+2. 平均响应时间趋势图
+3. 错误率趋势图
+4. 当前并发请求数
+
+**告警规则**：
+1. Firecrawl API 错误率 > 10%（5 分钟内）
+2. 平均响应时间 > 10 秒（5 分钟内）
+3. 内存使用率 > 90%
+4. Firecrawl API 调用被限流（429 错误）
+
+**日志聚合**：
+- 建议使用日志聚合工具（如 ELK、Loki 等）
+- 按错误类型分组统计
+- 按时间段分析趋势
+- 支持快速搜索和过滤
+
+
+---
+
+## 附录
+
+### A. 相关文档
+
+- [技术资料文档](./web-search-fetch-integration-research.md)
+- [Anthropic Web Search Tool 官方文档](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)
+- [Anthropic Web Fetch Tool 官方文档](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)
+- [Firecrawl Search API 官方文档](https://docs.firecrawl.dev/features/search)
+- [Firecrawl Scrape API 官方文档](https://docs.firecrawl.dev/features/scrape)
+
+### C. 联系方式
+
+如有问题或建议,请通过以下方式联系:
+- GitHub Issues: https://github.com/Passerby1011/cc-proxy/issues
+- 邮件: [项目维护者邮箱]

@@ -7,3 +7,5 @@ Toolify/
 /server.pid
 ？？
 logs/
+.claude
+docs/

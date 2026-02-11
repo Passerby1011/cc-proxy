@@ -36,9 +36,10 @@ export function extractTextForCounting(request: ClaudeRequest): string {
 
   // 1. 添加系统提示词（包含包装开销）
   if (request.system) {
-    const systemText = typeof request.system === "string"
-      ? request.system
-      : request.system.map(block => block.type === "text" ? block.text : "").join("");
+    // system 现在统一为数组格式
+    const systemText = request.system
+      .map((block) => block.type === "text" ? block.text : "")
+      .join("");
     fullPrompt += `System: ${systemText}\n\n`;
   }
 

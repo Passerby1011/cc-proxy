@@ -48,7 +48,7 @@ export interface ClaudeRequest {
   model: string;
   max_tokens: number;
   messages: ClaudeMessage[];
-  system?: string | ClaudeContentBlock[];
+  system?: ClaudeContentBlock[];
   stream?: boolean;
   temperature?: number;
   top_p?: number;
@@ -111,4 +111,5 @@ export type ParserEvent =
   | { type: "text"; content: string }
   | { type: "tool_call"; call: ParsedInvokeCall }
   | { type: "thinking"; content: string }
+  | { type: "tool_call_failed"; content: string; reason: string; priorText?: string }
   | { type: "end" };

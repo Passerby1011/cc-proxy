@@ -15,6 +15,7 @@
     }
   },
   "imports": {
-    "js-tiktoken": "npm:js-tiktoken@^1.0.7"
+    "js-tiktoken": "npm:js-tiktoken@^1.0.7",
+    "postgres": "https://deno.land/x/postgres@v0.17.0/mod.ts"
   }
 }

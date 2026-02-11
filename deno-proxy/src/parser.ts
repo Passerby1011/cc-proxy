@@ -1,363 +1,361 @@
-import { ParsedInvokeCall, ParsedThinkingCall, ParserEvent } from "./types.ts";
+import { ParsedInvokeCall, ParserEvent } from "./types.ts";
 import { log, logPhase, LogPhase } from "./logging.ts";
+import { ToolCallDelimiter } from "./signals.ts";
 
 // 思考标签常量
 const THINKING_START_TAG = "<thinking>";
 const THINKING_END_TAG = "</thinking>";
 
-function parseInvokeXml(xml: string): ParsedInvokeCall | null {
-  try {
-    const invokeMatch = xml.match(/<invoke[^>]*name="([^"]+)"[^>]*>/i);
-    if (!invokeMatch) return null;
-    const name = invokeMatch[1];
-    const params: Record<string, unknown> = {};
-    const paramRegex = /<parameter[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/parameter>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = paramRegex.exec(xml)) !== null) {
-      const key = match[1];
-      const rawValue = match[2] ?? "";
-      const trimmed = rawValue.trim();
-      let value: unknown = trimmed;
-      if (trimmed) {
-        try {
-          value = JSON.parse(trimmed);
-        } catch {
-          value = trimmed;
-        }
-      } else {
-        value = "";
-      }
-      params[key] = value;
-    }
-    return { name, arguments: params };
-  } catch (error) {
-    log("warn", "Failed to parse invoke XML", { error: String(error) });
-    return null;
-  }
-}
+type ParserState = "TEXT" | "THINKING" | "TOOL";
 
 export class ToolifyParser {
-  private readonly triggerSignal?: string;
-  // 是否开启思考解析，由上游请求的 thinking 配置决定
+  private readonly delimiter?: ToolCallDelimiter;
   private readonly thinkingEnabled: boolean;
-  private buffer = "";
-  private captureBuffer = "";
-  private capturing = false;
-  private thinkingMode = false;
+  
+  private state: ParserState = "TEXT";
+  private buffer = ""; // 通用缓冲区
   private thinkingBuffer = "";
+  private toolBuffer = "";
+  private textBeforeToolCall = ""; // 🔑 记录工具调用前的所有文本
+  
   private readonly events: ParserEvent[] = [];
   private readonly requestId?: string;
 
-  constructor(triggerSignal?: string, thinkingEnabled = false, requestId?: string) {
-    this.triggerSignal = triggerSignal;
+  /**
+   * 尝试修复模型生成的损坏 JSON
+   */
+  private repairJson(str: string): string {
+    let fixed = str.trim();
+
+    // 1. 处理明显的截断或前后杂质：提取第一个 { 和最后一个 } 之间的内容
+    const firstBrace = fixed.indexOf("{");
+    const lastBrace = fixed.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      fixed = fixed.slice(firstBrace, lastBrace + 1);
+    }
+
+    // 2. 移除末尾逗号 (Trailing Commas)
+    // 匹配: , 后面跟着紧随其后的 } 或 ]，中间允许有空白
+    fixed = fixed.replace(/,\s*([}\]])/g, "$1");
+
+    // 3. 处理字符串内部的非法换行符 (JSON 规范要求字符串内的换行必须转义为 \n)
+    // 这个正则寻找在双引号包裹的字符串内容中的真实换行符
+    // 逻辑：如果换行符出现在双引号之间，且前面的双引号不是被转义的
+    // 注意：这是一个简单启发式，处理不了极其复杂的嵌套，但能解决 90% 模型输出问题
+    fixed = fixed.replace(/(".*?[^\\]")|(\n)/g, (match, group1, group2) => {
+      if (group2) return "\\n"; // 如果匹配到的是换行符且不在 group1 (双引号块) 中，则替换
+      return group1; // 如果匹配到的是双引号块，保持原样
+    });
+
+    // 4. 🔑 处理最头疼的“字段内部未转义的双引号” (Case 1 & 2)
+    // 策略：寻找那些夹在汉字、字母、数字、标点符号中间，且前后不是 JSON 结构符号的孤立双引号
+    fixed = fixed.replace(/([^\{\}\[\]\s:,])"([^\{\}\[\]\s:,])/g, '$1\\"$2');
+
+    // 5. 补全裸奔的属性名 (Unquoted Keys)
+    // 匹配类似 { name: "val" } 或 , age: 30 这种 key 没加引号的情况
+    fixed = fixed.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+
+    // 6. 还原被错误包裹的布尔值、数字和 null
+    // 将 "true" -> true, "false" -> false, "null" -> null
+    fixed = fixed.replace(/:[ \t]*"(true|false|null)"/gi, (match, val) => {
+      return `: ${val.toLowerCase()}`;
+    });
+
+    // 1. 括号自动补全 (针对截断的情况)
+    // 扫描整个字符串，计算括号平衡
+    const stack: ("{" | "[")[] = [];
+    for (let i = 0; i < fixed.length; i++) {
+      const char = fixed[i];
+      if (char === '{') stack.push('{');
+      else if (char === '[') stack.push('[');
+      else if (char === '}') {
+        if (stack[stack.length - 1] === '{') stack.pop();
+      } else if (char === ']') {
+        if (stack[stack.length - 1] === '[') stack.pop();
+      }
+    }
+    // 按相反顺序补齐缺失的闭合括号
+    while (stack.length > 0) {
+      const open = stack.pop();
+      fixed += (open === '{' ? '}' : ']');
+    }
+
+    return fixed;
+  }
+
+  public tryParseJson(str: string): any {
+    if (!str) return {};
+    
+    // 首先尝试原始解析
+    try {
+      return JSON.parse(str);
+    } catch (_e) {
+      // 原始解析失败，进入修复逻辑
+      const repaired = this.repairJson(str);
+      try {
+        return JSON.parse(repaired);
+      } catch (err) {
+        // 如果修复后还是失败，尝试最后的挣扎：处理极端换行和控制字符
+        try {
+          const lastResort = repaired
+            .replace(/\n/g, "\\n")
+            .replace(/\r/g, "\\r")
+            .replace(/\t/g, "\\t");
+          return JSON.parse(lastResort);
+        } catch (_finalError) {
+          log("debug", "JSON Repair failed", {
+            original: str.slice(0, 200),
+            repaired: repaired.slice(0, 200),
+            error: String(err)
+          });
+          return null;
+        }
+      }
+    }
+  }
+
+  constructor(delimiter?: ToolCallDelimiter, thinkingEnabled = false, requestId?: string) {
+    this.delimiter = delimiter;
     this.thinkingEnabled = thinkingEnabled;
     this.requestId = requestId;
   }
 
+  feedReasoning(content: string) {
+    if (content) {
+      this.events.push({ type: "thinking", content });
+    }
+  }
+
   feedChar(char: string) {
-    // 当 triggerSignal 未配置时，不启用工具协议，仅在 thinkingEnabled=true 时解析 <thinking>
-    if (!this.triggerSignal) {
-      this.handleCharWithoutTrigger(char);
-      return;
-    }
-
-    // 以下为“启用工具协议”的模式，根据 thinkingEnabled 决定是否解析 <thinking> 块
-
-    if (this.thinkingEnabled) {
-      // 首先检查是否进入或退出思考模式
-      this.checkThinkingMode(char);
-
-      if (this.thinkingMode) {
-        this.thinkingBuffer += char;
-        this.tryEmitThinking();
-        return;
-      }
-    }
-
-    if (this.capturing) {
-      this.captureBuffer += char;
-      // Log when we detect potential invoke tags in capture mode
-      // Note: This log stays as system log since it's not request-specific
-      if (this.captureBuffer.toLowerCase().includes("<invoke")) {
-        log("debug", "Detected invoke tag in capture buffer", {
-          captureBufferPreview: this.captureBuffer.slice(0, 200),
-        });
-      }
-      this.tryEmitInvokes();
-      return;
-    }
-
     this.buffer += char;
-    if (this.buffer.endsWith(this.triggerSignal)) {
-      // Note: This log stays as system log since it's not request-specific
-      log("debug", "Trigger signal detected", {
-        triggerSignal: this.triggerSignal,
-        bufferBefore: this.buffer.slice(0, 200),
-      });
-      const textPortion = this.buffer.slice(0, -this.triggerSignal.length);
-      if (textPortion) {
-        this.events.push({ type: "text", content: textPortion });
+    this.processBuffer();
+  }
+
+  private processBuffer() {
+    const m = this.delimiter?.getMarkers();
+
+    if (this.state === "THINKING") {
+      // 思考模式中：只寻找结束标签
+      if (this.buffer.includes(THINKING_END_TAG)) {
+        const idx = this.buffer.indexOf(THINKING_END_TAG);
+        this.thinkingBuffer += this.buffer.slice(0, idx);
+        
+        // 发出思考事件
+        let content = this.thinkingBuffer.replace(/^\s*>\s*/, "");
+        if (content) {
+          this.events.push({ type: "thinking", content });
+        }
+        
+        // 切换回文本模式
+        this.thinkingBuffer = "";
+        this.state = "TEXT";
+        // 剩余部分重新处理
+        const remaining = this.buffer.slice(idx + THINKING_END_TAG.length);
+        this.buffer = "";
+        if (remaining) {
+          this.feedChar(""); // 触发递归处理，但其实直接赋值 buffer 更安全
+          this.buffer = remaining;
+          this.processBuffer();
+        }
       }
-      this.buffer = "";
-      this.capturing = true;
-      this.captureBuffer = "";
+      // 如果没找到结束标签，buffer 继续增长
+      return;
     }
-    // Log if buffer is getting long without trigger signal
-    if (this.buffer.length > 100 && this.buffer.length % 100 === 0) {
-      // Note: This log stays as system log since it's not request-specific
-      log("debug", "Parser buffer accumulating without trigger", {
-        bufferLength: this.buffer.length,
-        bufferTail: this.buffer.slice(-100),
-        expectedTrigger: this.triggerSignal,
-      });
+
+    if (this.state === "TOOL") {
+      // 工具模式中：寻找结束标记
+      if (m && this.buffer.includes(m.TC_END)) {
+        const idx = this.buffer.indexOf(m.TC_END) + m.TC_END.length;
+        this.toolBuffer += this.buffer.slice(0, idx);
+        
+        this.parseAndEmitToolCall();
+        
+        this.state = "TEXT";
+        const remaining = this.buffer.slice(idx);
+        this.buffer = "";
+        if (remaining) {
+          this.buffer = remaining;
+          this.processBuffer();
+        }
+      }
+      return;
+    }
+
+    // TEXT 状态：寻找思考开始或工具开始
+    
+    // 1. 优先检测思考开始 (如果启用)
+    if (this.thinkingEnabled && this.buffer.includes(THINKING_START_TAG)) {
+      const idx = this.buffer.indexOf(THINKING_START_TAG);
+      const textBefore = this.buffer.slice(0, idx);
+      if (textBefore) {
+        this.events.push({ type: "text", content: textBefore });
+      }
+      
+      this.state = "THINKING";
+      this.thinkingBuffer = "";
+      const remaining = this.buffer.slice(idx + THINKING_START_TAG.length);
+      this.buffer = "";
+      if (remaining) {
+        this.buffer = remaining;
+        this.processBuffer();
+      }
+      return;
+    }
+
+    // 2. 检测工具调用开始
+    if (m && this.buffer.includes(m.TC_START)) {
+      const idx = this.buffer.indexOf(m.TC_START);
+      const textBefore = this.buffer.slice(0, idx);
+      if (textBefore) {
+        this.textBeforeToolCall += textBefore; // 🔑 累积前置文本
+        this.events.push({ type: "text", content: textBefore });
+      }
+      
+      this.state = "TOOL";
+      this.toolBuffer = ""; // TC_START 留在 buffer 里交给 TOOL 状态处理
+      const remaining = this.buffer.slice(idx);
+      this.buffer = "";
+      if (remaining) {
+        this.buffer = remaining;
+        this.processBuffer();
+      }
+      return;
+    }
+
+    // 3. 保护逻辑：如果 buffer 太长且没有发现任何标记，刷出部分文本
+    // 但要保留可能成为标记一部分的后缀
+    const maxMarkerLen = Math.max(
+      THINKING_START_TAG.length,
+      m?.TC_START.length || 0
+    );
+    
+    if (this.buffer.length > 512) {
+      const safeLen = this.buffer.length - maxMarkerLen;
+      const safeText = this.buffer.slice(0, safeLen);
+      this.events.push({ type: "text", content: safeText });
+      this.buffer = this.buffer.slice(safeLen);
     }
   }
 
   finish() {
-    if (this.buffer) {
-      this.events.push({ type: "text", content: this.buffer });
+    if (this.state === "THINKING") {
+      let content = this.thinkingBuffer + this.buffer;
+      content = content.replace(/^\s*>\s*/, "");
+      if (content) {
+        this.events.push({ type: "thinking", content });
+      }
+    } else if (this.state === "TOOL") {
+      this.toolBuffer += this.buffer;
+      this.parseAndEmitToolCall(); // 🔑 尝试解析，可能发出 tool_call_failed 事件
+    } else {
+      if (this.buffer) {
+        this.textBeforeToolCall += this.buffer; // 🔑 累积文本模式下的内容
+        this.events.push({ type: "text", content: this.buffer });
+      }
     }
-    if (this.thinkingEnabled && this.thinkingMode && this.thinkingBuffer) {
-      // 如果在思考模式下结束，发出剩余的思考内容
-      // 同样需要修复开头多一个 ">" 的问题
-      let thinkingContent = this.thinkingBuffer;
-      thinkingContent = thinkingContent.replace(/^\s*>\s*/, "");
-      this.events.push({ type: "thinking", content: thinkingContent });
-    }
-    this.tryEmitInvokes(true);
+
     this.events.push({ type: "end" });
+    
+    // 重置
+    this.state = "TEXT";
     this.buffer = "";
-    this.captureBuffer = "";
-    this.capturing = false;
     this.thinkingBuffer = "";
-    this.thinkingMode = false;
+    this.toolBuffer = "";
+    this.textBeforeToolCall = "";
   }
 
   consumeEvents(): ParserEvent[] {
-    const pending = this.events.splice(0, this.events.length);
-    return pending;
+    return this.events.splice(0, this.events.length);
   }
 
-  private tryEmitInvokes(force = false) {
-    const lower = this.captureBuffer.toLowerCase();
-    const startIdx = lower.indexOf("<invoke");
-    
-    if (startIdx === -1) {
-      if (!force) {
-        return;
+  private parseAndEmitToolCall() {
+    if (!this.delimiter) return;
+    const m = this.delimiter.getMarkers();
+    const content = this.toolBuffer;
+
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    // 更加宽松的正则表达式：允许在标记之间存在任意空白符（包括缩进）
+    const regex = new RegExp(
+      `${esc(m.TC_START)}[\\s\\S]*?` +
+        `${esc(m.NAME_START)}\\s*([\\s\\S]*?)\\s*${esc(m.NAME_END)}[\\s\\S]*?` +
+        `${esc(m.ARGS_START)}\\s*([\\s\\S]*?)\\s*${esc(m.ARGS_END)}[\\s\\S]*?` +
+        `${esc(m.TC_END)}`,
+      "g"
+    );
+
+    let found = false;
+    let match: RegExpExecArray | null;
+    let name = "";
+    let argsStr = "";
+
+    // 1. 尝试正则匹配
+    if ((match = regex.exec(content)) !== null) {
+      name = match[1].trim();
+      argsStr = match[2].trim();
+    } else {
+      // 2. 如果正则匹配失败，尝试基于关键标记定位的"模糊匹配"
+      const nStart = content.indexOf(m.NAME_START);
+      const nEnd = content.indexOf(m.NAME_END, nStart + m.NAME_START.length);
+      const aStart = content.indexOf(m.ARGS_START, nEnd + m.NAME_END.length);
+      const aEnd = content.indexOf(m.ARGS_END, aStart + m.ARGS_START.length);
+
+      if (nStart !== -1 && nEnd !== -1 && aStart !== -1 && aEnd !== -1) {
+        name = content.slice(nStart + m.NAME_START.length, nEnd).trim();
+        argsStr = content.slice(aStart + m.ARGS_START.length, aEnd).trim();
+        log("debug", "Regex failed, but fuzzy marker matching succeeded", { name, requestId: this.requestId });
       }
-      if (this.captureBuffer) {
-        log("debug", "No invoke tag found, emitting as text", {
-          captureBufferPreview: this.captureBuffer.slice(0, 200),
-          force,
+    }
+
+    if (name) {
+      // 尝试解析或修复 JSON
+      const args = this.tryParseJson(argsStr);
+      if (args !== null) {
+        logPhase(this.requestId || "unknown", LogPhase.TOOL, `${name}()`, {
+          args: argsStr.slice(0, 100) + (argsStr.length > 100 ? "..." : ""),
         });
-        this.events.push({ type: "text", content: this.captureBuffer });
-        this.captureBuffer = "";
-      }
-      this.capturing = false;
-      return;
-    }
 
-    const endIdx = this.captureBuffer.indexOf("</invoke>", startIdx);
-    if (endIdx === -1) {
-      log("debug", "Incomplete invoke tag, waiting for more data", {
-        captureBufferPreview: this.captureBuffer.slice(startIdx, startIdx + 200),
-      });
-      return;
-    }
-
-    const endPos = endIdx + "</invoke>".length;
-    const invokeXml = this.captureBuffer.slice(startIdx, endPos);
-    
-    // 检查 </invoke> 后面的内容
-    const afterInvoke = this.captureBuffer.slice(endPos);
-    const afterTrimmed = afterInvoke.trimStart();
-    
-    // 如果后面有非空白字符，且不是另一个 <invoke>，回退到文本模式
-    if (afterTrimmed && !afterTrimmed.toLowerCase().startsWith("<invoke") && !force) {
-      log("debug", "Non-whitespace content after </invoke>, falling back to text mode", {
-        afterContent: afterTrimmed.slice(0, 100),
-      });
-      this.events.push({ type: "text", content: this.captureBuffer });
-      this.captureBuffer = "";
-      this.capturing = false;
-      return;
-    }
-
-    log("debug", "Found complete invoke tag", {
-      invokeXml: invokeXml.slice(0, 500),
-    });
-    
-    const before = this.captureBuffer.slice(0, startIdx);
-    if (before) {
-      this.events.push({ type: "text", content: before });
-    }
-
-    const parsed = parseInvokeXml(invokeXml);
-    if (parsed) {
-      // 使用新的日志格式
-      if (this.requestId) {
-        const argsPreview = JSON.stringify(parsed.arguments).slice(0, 50);
-        logPhase(this.requestId, LogPhase.TOOL, `${parsed.name}()`, {
-          args: argsPreview + (JSON.stringify(parsed.arguments).length > 50 ? "..." : ""),
+        this.events.push({
+          type: "tool_call",
+          call: { name, arguments: args },
         });
+        found = true;
       } else {
-        log("debug", "Successfully parsed first invoke call", {
-          toolName: parsed.name,
-          argumentKeys: Object.keys(parsed.arguments),
+        log("warn", "Failed to parse tool call arguments even after repair", {
+          name,
+          argsStr: argsStr.slice(0, 1000),
+          requestId: this.requestId,
         });
       }
-      this.events.push({ type: "tool_call", call: parsed });
+    }
+
+    if (!found) {
+      // 🔑 确定失败原因
+      const reason = content.includes(m.TC_END) ? "malformed_json" : "incomplete_delimiter";
       
-      // 过滤掉第一个工具调用后面的所有 <invoke>...</invoke> 标签
-      // 但保留非工具调用的文本内容
-      let remaining = afterInvoke;
-      let filteredContent = "";
-      
-      while (true) {
-        const trimmed = remaining.trimStart();
-        if (!trimmed) break;
-        
-        // 检查是否是另一个 <invoke> 标签
-        if (trimmed.toLowerCase().startsWith("<invoke")) {
-          const nextEndIdx = trimmed.indexOf("</invoke>");
-          if (nextEndIdx !== -1) {
-            // 找到完整的 <invoke>...</invoke>，跳过它
-            const skippedTag = trimmed.slice(0, nextEndIdx + "</invoke>".length);
-            log("debug", "Filtering out subsequent tool call", {
-              skippedTagPreview: skippedTag.slice(0, 200),
-            });
-            remaining = trimmed.slice(nextEndIdx + "</invoke>".length);
-            continue;
-          }
-        }
-        
-        // 不是工具调用，保留这部分内容
-        filteredContent = remaining;
-        break;
-      }
-      
-      if (filteredContent.trim()) {
-        log("debug", "Emitting remaining non-tool-call content as text", {
-          contentPreview: filteredContent.slice(0, 200),
-        });
-        this.events.push({ type: "text", content: filteredContent });
-      }
-    } else {
-      log("warn", "Failed to parse invoke XML", {
-        invokeXml: invokeXml.slice(0, 500),
+      log("warn", "No valid tool call found in tool buffer", {
+        requestId: this.requestId,
+        reason,
+        bufferSize: content.length,
+        bufferPreview: content.slice(0, 1000),
       });
-      // 解析失败时，将整个捕获内容作为文本输出
-      this.events.push({ type: "text", content: this.captureBuffer });
+      
+      // 🔑 发出 tool_call_failed 事件而不是降级为文本
+      this.events.push({ 
+        type: "tool_call_failed", 
+        content,
+        reason,
+        priorText: this.textBeforeToolCall
+      });
+    } else {
+      const lastMatchEnd = regex.lastIndex;
+      const remaining = content.slice(lastMatchEnd);
+      if (remaining.trim()) {
+        this.events.push({ type: "text", content: remaining });
+      }
     }
     
-    // 清空缓冲区并退出捕获模式
-    this.captureBuffer = "";
-    this.capturing = false;
-  }
-
-  /**
-   * 在未启用工具协议（无 triggerSignal）时的解析逻辑：
-   * - 只解析 <thinking>...</thinking>，并发出 thinking 事件；
-   * - 其余内容全部作为普通文本 text 事件；
-   * - 不进行任何 <invoke> / 工具调用解析。
-   */
-  private handleCharWithoutTrigger(char: string) {
-    // 未开启思考解析时，简单地把所有内容当作文本处理
-    if (!this.thinkingEnabled) {
-      this.buffer += char;
-      if (this.buffer.length >= 256) {
-        this.events.push({ type: "text", content: this.buffer });
-        this.buffer = "";
-      }
-      return;
-    }
-    if (this.thinkingMode) {
-      // 已处于思考模式：累积思考内容并检查结束标签
-      this.thinkingBuffer += char;
-      if (this.thinkingBuffer.endsWith(THINKING_END_TAG)) {
-        log("debug", "Exiting thinking mode (no-trigger)", {
-          thinkingContent: this.thinkingBuffer.slice(0, -THINKING_END_TAG.length),
-        });
-        let thinkingContent = this.thinkingBuffer.slice(0, -THINKING_END_TAG.length);
-        // 与启用工具时保持一致：去掉开头多余的 ">" 和空白
-        thinkingContent = thinkingContent.replace(/^\s*>\s*/, "");
-        if (thinkingContent) {
-          this.events.push({ type: "thinking", content: thinkingContent });
-        }
-        this.thinkingBuffer = "";
-        this.thinkingMode = false;
-      }
-      return;
-    }
-
-    // 未处于思考模式：累积到普通缓冲区，检测 <thinking> 起始标签
-    this.buffer += char;
-    if (this.buffer.endsWith(THINKING_START_TAG)) {
-      log("debug", "Entering thinking mode (no-trigger)", {
-        bufferBefore: this.buffer.slice(0, -THINKING_START_TAG.length),
-      });
-      const textPortion = this.buffer.slice(0, -THINKING_START_TAG.length);
-      if (textPortion) {
-        this.events.push({ type: "text", content: textPortion });
-      }
-      this.buffer = "";
-      this.thinkingMode = true;
-      this.thinkingBuffer = "";
-      return;
-    }
-
-    // 为了避免无限积累缓冲区，这里做一个简单的流式折中：
-    // 当缓冲区超出一定长度时，直接作为文本输出。
-    if (this.buffer.length >= 256) {
-      this.events.push({ type: "text", content: this.buffer });
-      this.buffer = "";
-    }
-  }
-
-  private checkThinkingMode(char: string) {
-    if (!this.thinkingEnabled) return;
-    // 检查是否进入思考模式
-    if (!this.thinkingMode) {
-      const tempBuffer = this.buffer + char;
-      if (tempBuffer.endsWith(THINKING_START_TAG)) {
-        log("debug", "Entering thinking mode", {
-          bufferBefore: this.buffer.slice(0, -THINKING_START_TAG.length + 1),
-        });
-        // 发出思考标签之前的文本
-        const textPortion = this.buffer.slice(0, -THINKING_START_TAG.length + 1);
-        if (textPortion) {
-          this.events.push({ type: "text", content: textPortion });
-        }
-        this.buffer = "";
-        this.thinkingMode = true;
-        this.thinkingBuffer = "";
-        return;
-      }
-    } else {
-      // 检查是否退出思考模式
-      if (this.thinkingBuffer.endsWith(THINKING_END_TAG)) {
-        log("debug", "Exiting thinking mode", {
-          thinkingContent: this.thinkingBuffer.slice(0, -THINKING_END_TAG.length),
-        });
-        // 发出思考内容（不包含结束标签）
-        let thinkingContent = this.thinkingBuffer.slice(0, -THINKING_END_TAG.length);
-        // 修复思考块开头多一个 ">" 的问题：由于当前解析逻辑在进入思考模式时，
-        // 会把 "<thinking>" 的结尾 ">" 作为首个思考字符写入 thinkingBuffer，
-        // 这里在真正发出事件前将前导的 ">" 和紧随其后的空白去掉。
-        thinkingContent = thinkingContent.replace(/^\s*>\s*/, "");
-        if (thinkingContent) {
-          this.events.push({ type: "thinking", content: thinkingContent });
-        }
-        this.thinkingBuffer = "";
-        this.thinkingMode = false;
-        return;
-      }
-    }
-  }
-  
-  private tryEmitThinking() {
-    // 暂时不实现流式思考内容发出，等待完整的思考块
-    // 这样可以保持与工具调用类似的处理方式
+    this.toolBuffer = "";
   }
 }
+

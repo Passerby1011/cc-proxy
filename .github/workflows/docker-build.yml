@@ -2,7 +2,7 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "development", "preview" ]
   workflow_dispatch:
 
 jobs:
@@ -32,7 +32,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=development,enable=${{ github.ref == 'refs/heads/development' }}
+            type=raw,value=preview,enable=${{ github.ref == 'refs/heads/preview' }}
             type=sha,prefix=,format=short
 
       - name: Build and push Docker image

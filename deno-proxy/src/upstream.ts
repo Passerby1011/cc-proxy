@@ -572,7 +572,7 @@ async function handleNativeToolCalling(
       stream: true,
     };
 
-    // 添加可选字段（只添加有值的字段）
+    // 添加可选字段（只添加有值且符合 Anthropic API 标准的字段）
     if (originalRequest.system) {
       anthropicRequest.system = originalRequest.system;
     }
@@ -582,20 +582,18 @@ async function handleNativeToolCalling(
     if (originalRequest.top_p !== undefined) {
       anthropicRequest.top_p = originalRequest.top_p;
     }
-    if (originalRequest.top_k !== undefined) {
-      anthropicRequest.top_k = originalRequest.top_k;
-    }
     if (originalRequest.stop_sequences) {
       anthropicRequest.stop_sequences = originalRequest.stop_sequences;
-    }
-    if (originalRequest.metadata) {
-      anthropicRequest.metadata = originalRequest.metadata;
     }
     if (allTools.length > 0) {
       anthropicRequest.tools = allTools;
     }
     if (originalRequest.tool_choice !== undefined) {
       anthropicRequest.tool_choice = originalRequest.tool_choice;
+    }
+    // Extended Thinking 是标准功能
+    if (originalRequest.thinking) {
+      anthropicRequest.thinking = originalRequest.thinking;
     }
 
     // 移除所有 undefined 值的字段
@@ -615,6 +613,13 @@ async function handleNativeToolCalling(
     protocol,
     url: upstreamConfig.baseUrl,
     nativeToolsCount: nativeTools.length,
+  });
+
+  // 调试：记录请求体
+  log("debug", "Request body for native tool calling", {
+    requestId,
+    bodyPreview: requestBody.substring(0, 500),
+    bodyLength: requestBody.length,
   });
 
   const upstreamStartTime = Date.now();

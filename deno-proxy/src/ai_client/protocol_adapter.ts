@@ -67,11 +67,13 @@ export class OpenAIAdapter implements ProtocolAdapter {
       content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
     }));
 
-    // 🔑 处理 system prompt：如果 metadata 中包含 system，则将其作为 system 消息插入到头部
+    // 🔑 处理 system prompt：如果 metadata 中包含 system，则将其作为消息插入到头部
+    // 根据 supportsSystemPrompt 标志决定使用 system 角色还是 user 角色
     if (options.metadata?.system) {
+      const supportsSystemPrompt = options.metadata?.supportsSystemPrompt !== false;
       openaiMessages.unshift({
-        role: "system",
-        content: options.metadata.system,
+        role: supportsSystemPrompt ? "system" : "user",
+        content: options.metadata.system as string,
       });
     }
 
@@ -83,6 +85,14 @@ export class OpenAIAdapter implements ProtocolAdapter {
       temperature: options.temperature,
       top_p: options.top_p,
     };
+
+    // 添加工具定义
+    if (options.tools && (options.tools as unknown[]).length > 0) {
+      requestBody.tools = options.tools;
+    }
+    if (options.tool_choice !== undefined) {
+      requestBody.tool_choice = options.tool_choice;
+    }
 
     return JSON.stringify(requestBody);
   }
@@ -170,6 +180,14 @@ export class AnthropicAdapter implements ProtocolAdapter {
       top_p: options.top_p,
       system: options.metadata?.system,
     };
+
+    // 添加工具定义
+    if (options.tools && (options.tools as unknown[]).length > 0) {
+      requestBody.tools = options.tools;
+    }
+    if (options.tool_choice !== undefined) {
+      requestBody.tool_choice = options.tool_choice;
+    }
 
     // 移除 undefined 字段
     Object.keys(requestBody).forEach((key) => {

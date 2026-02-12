@@ -55,18 +55,53 @@ const levelConfig: Record<LogLevel, { icon: string; color: string; label: string
 
 // 特殊阶段标记
 export const LogPhase = {
+  // 请求生命周期
   REQUEST: { icon: "📨", color: colors.cyan, label: "REQUEST" },
   ENRICHED: { icon: "📝", color: colors.magenta, label: "ENRICHED" },
   UPSTREAM: { icon: "🚀", color: colors.blue, label: "UPSTREAM" },
   STREAM: { icon: "⚡", color: colors.cyan, label: "STREAM" },
-  TOOL: { icon: "🔧", color: colors.magenta, label: "TOOL" },
-  THINKING: { icon: "💭", color: colors.blue, label: "THINKING" },
   COMPLETE: { icon: "✅", color: colors.green, label: "COMPLETE" },
   ERROR: { icon: "🔴", color: colors.red, label: "ERROR" },
   STATS: { icon: "📊", color: colors.cyan, label: "STATS" },
+  
+  // 工具调用相关
+  TOOL: { icon: "🔧", color: colors.magenta, label: "TOOL" },
+  TOOL_INTERCEPT: { icon: "🎯", color: colors.magenta, label: "INTERCEPT" },
+  TOOL_EXECUTE: { icon: "⚙️", color: colors.blue, label: "EXECUTE" },
+  TOOL_RESULT: { icon: "📦", color: colors.green, label: "RESULT" },
+  
+  // Web 工具专用
+  WEB_SEARCH: { icon: "🔍", color: colors.cyan, label: "SEARCH" },
+  WEB_FETCH: { icon: "🌐", color: colors.blue, label: "FETCH" },
+  WEB_SCRAPE: { icon: "📥", color: colors.blue, label: "SCRAPE" },
+  DEEP_BROWSE: { icon: "🔗", color: colors.magenta, label: "BROWSE" },
+  
+  // AI 分析相关
+  AI_ANALYSIS: { icon: "🤖", color: colors.blue, label: "ANALYSIS" },
+  AI_QUERY: { icon: "💬", color: colors.cyan, label: "QUERY" },
+  THINKING: { icon: "💭", color: colors.blue, label: "THINKING" },
+  
+  // 重试机制
   RETRY: { icon: "🔄", color: colors.yellow, label: "RETRY" },
   RETRY_SUCCESS: { icon: "✨", color: colors.green, label: "RETRY_OK" },
   RETRY_FAILED: { icon: "💥", color: colors.red, label: "RETRY_FAIL" },
+  
+  // 配置和管理
+  CONFIG: { icon: "⚙️", color: colors.cyan, label: "CONFIG" },
+  STORAGE: { icon: "💾", color: colors.blue, label: "STORAGE" },
+  SYNC: { icon: "🔄", color: colors.cyan, label: "SYNC" },
+  
+  // 协议和格式转换
+  PROTOCOL: { icon: "🔀", color: colors.magenta, label: "PROTOCOL" },
+  FORMAT: { icon: "📋", color: colors.blue, label: "FORMAT" },
+  
+  // 性能和监控
+  PERFORMANCE: { icon: "⏱️", color: colors.yellow, label: "PERF" },
+  TOKEN_COUNT: { icon: "🔢", color: colors.cyan, label: "TOKENS" },
+  
+  // 客户端交互
+  CLIENT: { icon: "👤", color: colors.green, label: "CLIENT" },
+  DISCONNECT: { icon: "🔌", color: colors.yellow, label: "DISCONNECT" },
 };
 
 // Request-specific log files

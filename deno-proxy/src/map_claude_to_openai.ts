@@ -15,10 +15,14 @@ function mapRole(role: string): "user" | "assistant" {
 
 /**
  * 将已增强（已处理工具注入和文本化）的 ClaudeRequest 转换为 OpenAIChatRequest
+ * @param body - Claude 格式的请求体
+ * @param requestModel - 目标模型名称
+ * @param supportsSystemPrompt - 是否支持系统提示词（默认 true，不支持时转换为 user 消息）
  */
 export function mapClaudeToOpenAI(
   body: ClaudeRequest,
   requestModel: string,
+  supportsSystemPrompt: boolean = true,
 ): OpenAIChatRequest {
   if (typeof body.max_tokens !== "number" || Number.isNaN(body.max_tokens)) {
     throw new Error("max_tokens is required for Claude requests");
@@ -36,7 +40,11 @@ export function mapClaudeToOpenAI(
         .map((block) => (block.type === "text" ? block.text : ""))
         .join("\n");
     }
-    messages.push({ role: "system", content: systemContent });
+    // 根据 supportsSystemPrompt 配置决定使用 system 还是 user 角色
+    messages.push({ 
+      role: supportsSystemPrompt ? "system" : "user", 
+      content: systemContent 
+    });
   }
 
   // 2. 处理 Messages

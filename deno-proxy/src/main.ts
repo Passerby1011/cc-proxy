@@ -10,6 +10,7 @@ import { AdminService } from "./admin_service.ts";
 import { ToolInterceptor } from "./tools/tool_interceptor.ts";
 import { StreamResponseWriter } from "./tools/stream_response_writer.ts";
 import { RequestContext } from "./ai_client/mod.ts";
+import type { AnthropicWebSearchToolDefinition, AnthropicWebFetchToolDefinition } from "./tools/types.ts";
 
 const initialConfig = loadConfig();
 const adminService = new AdminService(initialConfig);
@@ -137,7 +138,7 @@ async function handleMessages(req: Request, requestId: string) {
         (tool: any) => tool.type === "web_fetch_20250910",
       );
 
-      await logRequest(requestId, "info", "Intercepting Web Search/Fetch tool call", {
+      logPhase(requestId, LogPhase.TOOL_INTERCEPT, "Web Search/Fetch tool detected", {
         totalTools: body.tools?.length,
         hasWebSearch: !!webSearchTool,
         hasWebFetch: !!webFetchTool,
@@ -173,7 +174,7 @@ async function handleMessages(req: Request, requestId: string) {
                     // 智能模式：使用流式调用上游 API
                     // 先获取搜索结果
                     const searchResult = await interceptor.handleWebSearch(
-                      webSearchTool,
+                      webSearchTool as unknown as AnthropicWebSearchToolDefinition,
                       body.messages,
                       upstreamInfo,
                       requestId,
@@ -188,7 +189,7 @@ async function handleMessages(req: Request, requestId: string) {
                       // 流式分析的回调
                       async (onStreamChunk) => {
                         await interceptor.doStreamAnalysis(
-                          webSearchTool,
+                          webSearchTool as unknown as AnthropicWebSearchToolDefinition,
                           searchResult,
                           body.messages,
                           upstreamInfo,
@@ -210,7 +211,7 @@ async function handleMessages(req: Request, requestId: string) {
                   } else {
                     // 简单模式：仅返回搜索结果
                     const simpleResult = await interceptor.handleWebSearch(
-                      webSearchTool,
+                      webSearchTool as unknown as AnthropicWebSearchToolDefinition,
                       body.messages,
                       upstreamInfo,
                       requestId,
@@ -226,9 +227,6 @@ async function handleMessages(req: Request, requestId: string) {
                   const duration = Date.now() - startTime;
                   logRequestComplete(requestId, {
                     duration,
-                    intercepted: true,
-                    toolType: "web_search",
-                    mode: config.webTools.searchMode,
                   });
                 } catch (error) {
                   log("error", "Web Search streaming error", { requestId, error: String(error) });
@@ -254,7 +252,7 @@ async function handleMessages(req: Request, requestId: string) {
             let response;
             if (isSmartMode) {
               const smartResult = await interceptor.handleSmartWebSearch(
-                webSearchTool,
+                webSearchTool as unknown as AnthropicWebSearchToolDefinition,
                 body.messages,
                 upstreamInfo,
                 requestId,
@@ -279,7 +277,7 @@ async function handleMessages(req: Request, requestId: string) {
               };
             } else {
               const simpleResult = await interceptor.handleWebSearch(
-                webSearchTool,
+                webSearchTool as unknown as AnthropicWebSearchToolDefinition,
                 body.messages,
                 upstreamInfo,
                 requestId,
@@ -306,9 +304,6 @@ async function handleMessages(req: Request, requestId: string) {
             const duration = Date.now() - startTime;
             logRequestComplete(requestId, {
               duration,
-              intercepted: true,
-              toolType: "web_search",
-              mode: config.webTools.searchMode,
             });
 
             return jsonResponse(response);
@@ -347,7 +342,7 @@ async function handleMessages(req: Request, requestId: string) {
 
                 try {
                   const simpleResult = await interceptor.handleWebFetch(
-                    webFetchTool,
+                    webFetchTool as unknown as AnthropicWebFetchToolDefinition,
                     url,
                     requestId,
                   );
@@ -361,8 +356,6 @@ async function handleMessages(req: Request, requestId: string) {
                   const duration = Date.now() - startTime;
                   logRequestComplete(requestId, {
                     duration,
-                    intercepted: true,
-                    toolType: "web_fetch",
                   });
                 } catch (error) {
                   log("error", "Web Fetch streaming error", { requestId, error: String(error) });
@@ -385,7 +378,7 @@ async function handleMessages(req: Request, requestId: string) {
             });
           } else {
             // ========== 非流式模式 ==========
-            const simpleResult = await interceptor.handleWebFetch(webFetchTool, url, requestId);
+            const simpleResult = await interceptor.handleWebFetch(webFetchTool as unknown as AnthropicWebFetchToolDefinition, url, requestId);
 
             const response = {
               id: `msg_${crypto.randomUUID()}`,
@@ -407,8 +400,6 @@ async function handleMessages(req: Request, requestId: string) {
             const duration = Date.now() - startTime;
             logRequestComplete(requestId, {
               duration,
-              intercepted: true,
-              toolType: "web_fetch",
             });
 
             return jsonResponse(response);
@@ -572,7 +563,8 @@ export const handler = async (req: Request) => {
         headers: { "Content-Type": "text/html; charset=utf-8" }
       });
     } catch (e) {
-      return new Response("Index page not found: " + e.message, { status: 404 });
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      return new Response("Index page not found: " + errorMessage, { status: 404 });
     }
   }
 
@@ -584,7 +576,8 @@ export const handler = async (req: Request) => {
         headers: { "Content-Type": "text/html; charset=utf-8" }
       });
     } catch (e) {
-      return new Response("Admin UI not found: " + e.message, { status: 404 });
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      return new Response("Admin UI not found: " + errorMessage, { status: 404 });
     }
   }
 

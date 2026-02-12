@@ -85,8 +85,17 @@ export interface OpenAITextBlock {
 export type OpenAIContentBlock = OpenAITextBlock | OpenAIImageURLBlock;
 
 export interface OpenAIChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string | OpenAIContentBlock[];
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | OpenAIContentBlock[] | null;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+  tool_call_id?: string; // 用于 tool 角色消息
 }
 
 export interface OpenAIChatRequest {

@@ -18,7 +18,7 @@ import type {
   ClaudeTextBlock,
   ClaudeContentBlock,
 } from "../types.ts";
-import { log } from "../logging.ts";
+import { log, logRequest, LogPhase } from "../logging.ts";
 import { AIClient, RequestContext, ContextBuilder } from "../ai_client/mod.ts";
 
 /**
@@ -90,34 +90,31 @@ export class ToolInterceptor {
 
     const firecrawlResponse = await this.firecrawlClient.search(searchParams);
 
-    log("info", `🔎 Firecrawl search completed`, {
-      requestId,
+    logRequest(requestId, "info", `Firecrawl search completed`, {
       query,
       resultsCount: firecrawlResponse.data.web.length,
       creditsUsed: firecrawlResponse.credits_used,
-    });
+    }, LogPhase.WEB_SEARCH);
 
     // 过滤域名（如果有限制）
     if (tool.allowed_domains && tool.allowed_domains.length > 0) {
       firecrawlResponse.data.web = firecrawlResponse.data.web.filter((result) =>
         tool.allowed_domains!.some((domain) => result.url.includes(domain))
       );
-      log("info", `🔍 Filtered by allowed_domains`, {
-        requestId,
+      logRequest(requestId, "info", `Filtered by allowed_domains`, {
         remainingCount: firecrawlResponse.data.web.length,
         allowedDomains: tool.allowed_domains,
-      });
+      }, LogPhase.WEB_SEARCH);
     }
 
     if (tool.blocked_domains && tool.blocked_domains.length > 0) {
       firecrawlResponse.data.web = firecrawlResponse.data.web.filter((result) =>
         !tool.blocked_domains!.some((domain) => result.url.includes(domain))
       );
-      log("info", `🚫 Filtered by blocked_domains`, {
-        requestId,
+      logRequest(requestId, "info", `Filtered by blocked_domains`, {
         remainingCount: firecrawlResponse.data.web.length,
         blockedDomains: tool.blocked_domains,
-      });
+      }, LogPhase.WEB_SEARCH);
     }
 
     // 生成唯一的 tool use id (使用 server_tool_use 的 srvtoolu_ 前缀)
@@ -129,8 +126,7 @@ export class ToolInterceptor {
       toolUseId,
     );
 
-    log("info", `📦 Search result converted to Anthropic format`, {
-      requestId,
+    logRequest(requestId, "info", `Search result converted`, {
       toolUseId,
       contentCount: toolResult.content.length,
       sampleResult: toolResult.content[0] ? {
@@ -138,7 +134,7 @@ export class ToolInterceptor {
         title: toolResult.content[0].title.substring(0, 50),
         hasEncrypted: !!toolResult.content[0].encrypted_content,
       } : null,
-    });
+    }, LogPhase.FORMAT);
 
     // 构建 server_tool_use
     const serverToolUse: AnthropicServerToolUse = {

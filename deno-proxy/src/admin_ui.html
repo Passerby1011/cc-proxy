@@ -884,7 +884,13 @@
             };
 
             const addChannel = () => {
-                const newChannels = [...(config.channelConfigs || []), { name: '', baseUrl: '', apiKey: '', protocol: config.defaultProtocol || 'openai' }];
+                const newChannels = [...(config.channelConfigs || []), {
+                    name: '',
+                    baseUrl: '',
+                    apiKey: '',
+                    protocol: config.defaultProtocol || 'openai',
+                    supportsNativeToolCalling: false  // 默认不支持原生工具调用
+                }];
                 setConfig({ ...config, channelConfigs: newChannels });
             };
 
@@ -1370,6 +1376,26 @@
                                                     <option value="auto">自动触发（Claude Code 模式）</option>
                                                 </select>
                                                 <div class="helper-text">留空则使用全局拦截触发模式配置</div>
+                                            </div>
+                                            <div class="form-group">
+                                                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                                    <input type="checkbox"
+                                                           checked=${ch.supportsNativeToolCalling === true}
+                                                           onChange=${e => updateChannel(i, 'supportsNativeToolCalling', e.target.checked)}
+                                                           style="width: auto; margin: 0;" />
+                                                    <span>支持原生工具调用</span>
+                                                </label>
+                                                <div class="helper-text">勾选后将直接传递工具定义给上游（适用于 OpenAI、Claude 等支持原生工具调用的 API），不进行 XML 转换</div>
+                                            </div>
+                                            <div class="form-group" style="margin-bottom: 0">
+                                                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                                    <input type="checkbox"
+                                                           checked=${ch.supportsSystemPrompt !== false}
+                                                           onChange=${e => updateChannel(i, 'supportsSystemPrompt', e.target.checked)}
+                                                           style="width: auto; margin: 0;" />
+                                                    <span>支持系统提示词（System Prompt）</span>
+                                                </label>
+                                                <div class="helper-text">取消勾选后，系统提示词将自动转换为用户消息（适用于不支持 system 角色的 API）</div>
                                             </div>
                                         </div>
                                     `)}

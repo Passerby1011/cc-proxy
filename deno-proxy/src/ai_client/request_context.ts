@@ -59,16 +59,27 @@ export class RequestContext {
       clientApiKey,
     );
 
-    // 3. 增强请求（工具调用注入）
-    const enrichResult = enrichClaudeRequest(originalRequest);
-    const enrichedRequest = enrichResult.request;
-    const delimiter = enrichResult.delimiter;
+    // 3. 确定工具调用模式
+    const toolCallMode: ToolCallMode = upstreamConfig.supportsNativeToolCalling
+      ? "native"
+      : "prompt_injection";
 
-    // 4. 确定请求格式（当前仅支持 anthropic 格式）
+    // 4. 增强请求（仅在 prompt_injection 模式下才注入工具 XML）
+    let enrichedRequest: ClaudeRequest;
+    let delimiter: ToolCallDelimiter | undefined;
+
+    if (toolCallMode === "prompt_injection") {
+      const enrichResult = enrichClaudeRequest(originalRequest);
+      enrichedRequest = enrichResult.request;
+      delimiter = enrichResult.delimiter;
+    } else {
+      // 原生工具调用模式，不需要注入 XML，直接使用原始请求
+      enrichedRequest = originalRequest;
+      delimiter = undefined;
+    }
+
+    // 5. 确定请求格式（当前仅支持 anthropic 格式）
     const requestFormat: RequestFormat = "anthropic";
-
-    // 5. 确定工具调用模式（当前仅支持提示词注入）
-    const toolCallMode: ToolCallMode = "prompt_injection";
 
     // 6. 构建上下文数据
     const contextData: RequestContextData = {
@@ -162,6 +173,8 @@ export class RequestContext {
     let apiKey: string | undefined;
     let model: string;
     let protocol: Protocol;
+    let supportsNativeToolCalling: boolean = false; // 默认不支持原生工具调用
+    let supportsSystemPrompt: boolean = true; // 默认支持系统提示词
 
     const plusIndex = modelName.indexOf("+");
 
@@ -176,12 +189,15 @@ export class RequestContext {
         apiKey = channel.apiKey;
         model = actualModel;
         protocol = (channel.protocol ?? config.defaultProtocol) as Protocol;
+        supportsNativeToolCalling = channel.supportsNativeToolCalling ?? false;
+        supportsSystemPrompt = channel.supportsSystemPrompt ?? true;
       } else {
         // 渠道未找到，使用默认配置
         baseUrl = config.upstreamBaseUrl!;
         apiKey = config.upstreamApiKey;
         model = modelName;
         protocol = config.defaultProtocol as Protocol;
+        supportsNativeToolCalling = false;
       }
     } else {
       // 没有 + 号，使用默认渠道或全局配置
@@ -191,11 +207,14 @@ export class RequestContext {
         apiKey = channel.apiKey;
         model = modelName;
         protocol = (channel.protocol ?? config.defaultProtocol) as Protocol;
+        supportsNativeToolCalling = channel.supportsNativeToolCalling ?? false;
+        supportsSystemPrompt = channel.supportsSystemPrompt ?? true;
       } else {
         baseUrl = config.upstreamBaseUrl!;
         apiKey = config.upstreamApiKey;
         model = config.upstreamModelOverride ?? modelName;
         protocol = config.defaultProtocol as Protocol;
+        supportsNativeToolCalling = false;
       }
     }
 
@@ -209,6 +228,8 @@ export class RequestContext {
       apiKey,
       model,
       protocol,
+      supportsNativeToolCalling,
+      supportsSystemPrompt,
     };
   }
 
@@ -301,12 +322,11 @@ export class RequestContext {
   /**
    * 判断上游是否支持原生工具调用
    *
-   * 📌 当前实现：全部返回 false（仅支持提示词注入）
+   * 📌 从渠道配置中读取 supportsNativeToolCalling 字段
    * 🔮 未来扩展：根据 protocol 和上游能力判断
    */
   supportsNativeToolCall(): boolean {
-    // 当前仅支持提示词注入模式
-    return false;
+    return this.data.upstreamConfig.supportsNativeToolCalling ?? false;
   }
 
   /**

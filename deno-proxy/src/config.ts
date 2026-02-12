@@ -6,6 +6,8 @@ export interface ChannelConfig {
   apiKey?: string;
   protocol?: "openai" | "anthropic"; // 渠道协议类型，默认为 openai
   autoTrigger?: boolean; // 渠道级拦截触发模式（可选，未设置则使用全局配置）
+  supportsNativeToolCalling?: boolean; // 是否支持原生工具调用（默认 false，使用 XML 注入）
+  supportsSystemPrompt?: boolean; // 是否支持系统提示词（默认 true，不支持时转换为 user 消息）
 }
 
 export interface ToolCallRetryConfig {
@@ -151,6 +153,8 @@ function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelCon
     const apiKey = Deno.env.get(`CHANNEL_${i}_API_KEY`);
     const rawProtocol = Deno.env.get(`CHANNEL_${i}_PROTOCOL`);
     const rawAutoTrigger = Deno.env.get(`CHANNEL_${i}_AUTO_TRIGGER`);
+    const rawSupportsNativeToolCalling = Deno.env.get(`CHANNEL_${i}_SUPPORTS_NATIVE_TOOL_CALLING`);
+    const rawSupportsSystemPrompt = Deno.env.get(`CHANNEL_${i}_SUPPORTS_SYSTEM_PROMPT`);
 
     if (!name || !baseUrl) {
       // 如果缺少必要字段，停止搜索
@@ -170,12 +174,32 @@ function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelCon
     }
     // 如果未设置，保持 undefined，使用全局配置
 
+    // 解析 supportsNativeToolCalling（可选配置，默认 false）
+    let supportsNativeToolCalling: boolean | undefined;
+    if (rawSupportsNativeToolCalling === "true") {
+      supportsNativeToolCalling = true;
+    } else if (rawSupportsNativeToolCalling === "false") {
+      supportsNativeToolCalling = false;
+    }
+    // 如果未设置，保持 undefined，使用默认值 false
+
+    // 解析 supportsSystemPrompt（可选配置，默认 true）
+    let supportsSystemPrompt: boolean | undefined;
+    if (rawSupportsSystemPrompt === "true") {
+      supportsSystemPrompt = true;
+    } else if (rawSupportsSystemPrompt === "false") {
+      supportsSystemPrompt = false;
+    }
+    // 如果未设置，保持 undefined，使用默认值 true
+
     configs.push({
       name,
       baseUrl,
       apiKey,
       protocol,
       autoTrigger,
+      supportsNativeToolCalling,
+      supportsSystemPrompt,
     });
     i++;
   }

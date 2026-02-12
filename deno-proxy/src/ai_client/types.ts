@@ -54,6 +54,12 @@ export interface UpstreamConfig {
 
   /** 上游协议类型 */
   protocol: Protocol;
+
+  /** 是否支持原生工具调用（默认 false，使用 XML 注入） */
+  supportsNativeToolCalling?: boolean;
+
+  /** 是否支持系统提示词（默认 true，不支持时转换为 user 消息） */
+  supportsSystemPrompt?: boolean;
 }
 
 /**

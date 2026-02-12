@@ -1,6 +1,7 @@
 import { ProxyConfig, ConfigStorage } from "./config.ts";
 import { LocalStorage } from "./storage_local.ts";
 import { PostgresStorage } from "./storage_postgres.ts";
+import { LogPhase } from "./logging.ts";
 
 export class AdminService {
   private storage: ConfigStorage;
@@ -34,7 +35,7 @@ export class AdminService {
     if (hasStoredConfig) {
       const { log } = await import("./logging.ts");
       const storageType = this.currentConfig.pgStoreDsn ? "云端" : "本地";
-      log("info", `📥 已从${storageType}存储加载配置`, {});
+      log("info", `已从${storageType}存储加载配置`, {}, LogPhase.STORAGE);
     }
   }
 
@@ -107,7 +108,7 @@ export class AdminService {
     // 输出配置更新日志
     const { log, logConfigInfo } = await import("./logging.ts");
     const storageType = this.currentConfig.pgStoreDsn ? "云端" : "本地";
-    log("info", `✅ 配置已保存 (${storageType})`, {});
+    log("info", `配置已保存 (${storageType})`, {}, LogPhase.STORAGE);
     logConfigInfo(this.currentConfig as unknown as Record<string, unknown>, "⚙️  程序运行中配置");
     
     return new Response(JSON.stringify({ status: "success", config: this.currentConfig }), {
@@ -136,7 +137,7 @@ export class AdminService {
       // 输出同步日志
       const { log, logConfigInfo } = await import("./logging.ts");
       const storageType = this.currentConfig.pgStoreDsn ? "云端" : "本地";
-      log("info", `🔄 配置同步成功 (${storageType})`, {});
+      log("info", `配置同步成功 (${storageType})`, {}, LogPhase.SYNC);
       logConfigInfo(this.currentConfig as unknown as Record<string, unknown>, "⚙️  程序运行中配置");
       
       return new Response(JSON.stringify({ 

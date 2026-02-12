@@ -176,10 +176,18 @@ export class AnthropicAdapter implements ProtocolAdapter {
       messages: messages,
       stream: options.stream ?? false,
       max_tokens: options.max_tokens || 4096,
-      temperature: options.temperature,
-      top_p: options.top_p,
-      system: options.metadata?.system,
     };
+
+    // 只添加有值的可选字段
+    if (options.temperature !== undefined) {
+      requestBody.temperature = options.temperature;
+    }
+    if (options.top_p !== undefined) {
+      requestBody.top_p = options.top_p;
+    }
+    if (options.metadata?.system) {
+      requestBody.system = options.metadata.system;
+    }
 
     // 添加工具定义
     if (options.tools && (options.tools as unknown[]).length > 0) {
@@ -189,7 +197,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
       requestBody.tool_choice = options.tool_choice;
     }
 
-    // 移除 undefined 字段
+    // 移除 undefined 字段（双重保险）
     Object.keys(requestBody).forEach((key) => {
       if (requestBody[key as keyof typeof requestBody] === undefined) {
         delete requestBody[key as keyof typeof requestBody];

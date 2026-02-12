@@ -572,7 +572,7 @@ async function handleNativeToolCalling(
       stream: true,
     };
 
-    // 添加可选字段
+    // 添加可选字段（只添加有值的字段）
     if (originalRequest.system) {
       anthropicRequest.system = originalRequest.system;
     }
@@ -594,9 +594,16 @@ async function handleNativeToolCalling(
     if (allTools.length > 0) {
       anthropicRequest.tools = allTools;
     }
-    if (originalRequest.tool_choice) {
+    if (originalRequest.tool_choice !== undefined) {
       anthropicRequest.tool_choice = originalRequest.tool_choice;
     }
+
+    // 移除所有 undefined 值的字段
+    Object.keys(anthropicRequest).forEach(key => {
+      if (anthropicRequest[key] === undefined) {
+        delete anthropicRequest[key];
+      }
+    });
 
     requestBody = JSON.stringify(anthropicRequest);
   } else {

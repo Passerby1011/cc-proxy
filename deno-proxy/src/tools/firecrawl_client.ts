@@ -6,20 +6,126 @@ import type {
   FirecrawlScrapeResponse,
   FirecrawlBatchScrapeParams,
 } from "./types.ts";
+import { log } from "../logging.ts";
+
+/**
+ * 缓存条目接口
+ */
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+  expiresAt: number;
+}
 
 /**
  * Firecrawl API 客户端
  * 封装对 Firecrawl API 的调用，包括搜索和抓取功能
+ * 支持短期缓存以避免重复调用
  */
 export class FirecrawlClient {
-  constructor(private config: FirecrawlConfig) {}
+  // 搜索缓存：key = query, value = 搜索结果
+  private static searchCache = new Map<string, CacheEntry<FirecrawlSearchResponse>>();
+  
+  // 抓取缓存：key = url, value = 抓取结果
+  private static scrapeCache = new Map<string, CacheEntry<FirecrawlScrapeResponse>>();
+  
+  // 缓存过期时间（毫秒）- 默认 30 秒
+  private static readonly CACHE_TTL = 30000;
+  
+  // 最大缓存条目数
+  private static readonly MAX_CACHE_SIZE = 100;
+
+  constructor(private config: FirecrawlConfig) {
+    // 启动缓存清理定时器（每分钟清理一次过期缓存）
+    this.startCacheCleanup();
+  }
 
   /**
-   * 执行网络搜索
+   * 启动缓存清理定时器
+   */
+  private startCacheCleanup(): void {
+    // 每分钟清理一次过期缓存
+    setInterval(() => {
+      this.cleanupExpiredCache();
+    }, 60000);
+  }
+
+  /**
+   * 清理过期的缓存条目
+   */
+  private cleanupExpiredCache(): void {
+    const now = Date.now();
+    let searchCleaned = 0;
+    let scrapeCleaned = 0;
+
+    // 清理搜索缓存
+    for (const [key, entry] of FirecrawlClient.searchCache.entries()) {
+      if (now > entry.expiresAt) {
+        FirecrawlClient.searchCache.delete(key);
+        searchCleaned++;
+      }
+    }
+
+    // 清理抓取缓存
+    for (const [key, entry] of FirecrawlClient.scrapeCache.entries()) {
+      if (now > entry.expiresAt) {
+        FirecrawlClient.scrapeCache.delete(key);
+        scrapeCleaned++;
+      }
+    }
+
+    if (searchCleaned > 0 || scrapeCleaned > 0) {
+      log("debug", "Cleaned up expired Firecrawl cache", {
+        searchCleaned,
+        scrapeCleaned,
+        searchCacheSize: FirecrawlClient.searchCache.size,
+        scrapeCacheSize: FirecrawlClient.scrapeCache.size,
+      });
+    }
+  }
+
+  /**
+   * 限制缓存大小，删除最旧的条目
+   */
+  private static limitCacheSize<T>(cache: Map<string, CacheEntry<T>>): void {
+    if (cache.size > this.MAX_CACHE_SIZE) {
+      // 按时间戳排序，删除最旧的条目
+      const entries = Array.from(cache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+      
+      const toDelete = entries.slice(0, cache.size - this.MAX_CACHE_SIZE);
+      for (const [key] of toDelete) {
+        cache.delete(key);
+      }
+    }
+  }
+
+  /**
+   * 执行网络搜索（带缓存）
    */
   async search(params: FirecrawlSearchParams): Promise<FirecrawlSearchResponse> {
-    const url = `${this.config.baseUrl}/search`;
+    // 生成缓存键（包含查询参数）
+    const cacheKey = JSON.stringify({
+      query: params.query,
+      limit: params.limit,
+      location: params.location,
+    });
 
+    // 检查缓存
+    const cached = FirecrawlClient.searchCache.get(cacheKey);
+    const now = Date.now();
+    
+    if (cached && now < cached.expiresAt) {
+      log("info", "🔄 Using cached Firecrawl search result", {
+        query: params.query,
+        age: now - cached.timestamp,
+        cacheSize: FirecrawlClient.searchCache.size,
+      });
+      return cached.data;
+    }
+
+    // 执行实际搜索
+    const url = `${this.config.baseUrl}/search`;
     const body = {
       query: params.query,
       limit: params.limit,
@@ -27,22 +133,76 @@ export class FirecrawlClient {
       scrapeOptions: params.scrape_options,
     };
 
-    return await this.makeRequest<FirecrawlSearchResponse>(url, body);
+    const result = await this.makeRequest<FirecrawlSearchResponse>(url, body);
+
+    // 存入缓存
+    FirecrawlClient.searchCache.set(cacheKey, {
+      data: result,
+      timestamp: now,
+      expiresAt: now + FirecrawlClient.CACHE_TTL,
+    });
+
+    // 限制缓存大小
+    FirecrawlClient.limitCacheSize(FirecrawlClient.searchCache);
+
+    log("debug", "💾 Cached Firecrawl search result", {
+      query: params.query,
+      cacheSize: FirecrawlClient.searchCache.size,
+    });
+
+    return result;
   }
 
   /**
-   * 抓取单个 URL
+   * 抓取单个 URL（带缓存）
    */
   async scrape(params: FirecrawlScrapeParams): Promise<FirecrawlScrapeResponse> {
-    const url = `${this.config.baseUrl}/scrape`;
+    // 生成缓存键（包含 URL 和格式）
+    const cacheKey = JSON.stringify({
+      url: params.url,
+      formats: params.formats || ["markdown"],
+      location: params.location,
+    });
 
+    // 检查缓存
+    const cached = FirecrawlClient.scrapeCache.get(cacheKey);
+    const now = Date.now();
+    
+    if (cached && now < cached.expiresAt) {
+      log("info", "🔄 Using cached Firecrawl scrape result", {
+        url: params.url.substring(0, 100),
+        age: now - cached.timestamp,
+        cacheSize: FirecrawlClient.scrapeCache.size,
+      });
+      return cached.data;
+    }
+
+    // 执行实际抓取
+    const url = `${this.config.baseUrl}/scrape`;
     const body = {
       url: params.url,
       formats: params.formats || ["markdown"],
       location: params.location,
     };
 
-    return await this.makeRequest<FirecrawlScrapeResponse>(url, body);
+    const result = await this.makeRequest<FirecrawlScrapeResponse>(url, body);
+
+    // 存入缓存
+    FirecrawlClient.scrapeCache.set(cacheKey, {
+      data: result,
+      timestamp: now,
+      expiresAt: now + FirecrawlClient.CACHE_TTL,
+    });
+
+    // 限制缓存大小
+    FirecrawlClient.limitCacheSize(FirecrawlClient.scrapeCache);
+
+    log("debug", "💾 Cached Firecrawl scrape result", {
+      url: params.url.substring(0, 100),
+      cacheSize: FirecrawlClient.scrapeCache.size,
+    });
+
+    return result;
   }
 
   /**

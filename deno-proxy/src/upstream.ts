@@ -563,18 +563,39 @@ async function handleNativeToolCalling(
     }
     headers["anthropic-version"] = "2023-06-01";
 
-    // Anthropic 格式，直接使用原始请求，传递所有工具
+    // Anthropic 格式，构建干净的请求体
     const allTools = [...webTools, ...nativeTools];
-    const anthropicRequest = {
-      ...originalRequest,
+    const anthropicRequest: Record<string, any> = {
       model: upstreamConfig.model,
+      max_tokens: originalRequest.max_tokens || 4096,
+      messages: originalRequest.messages,
       stream: true,
-      tools: allTools.length > 0 ? allTools : undefined,
     };
 
-    // 移除 undefined 字段
-    if (!anthropicRequest.tools) {
-      delete anthropicRequest.tools;
+    // 添加可选字段
+    if (originalRequest.system) {
+      anthropicRequest.system = originalRequest.system;
+    }
+    if (originalRequest.temperature !== undefined) {
+      anthropicRequest.temperature = originalRequest.temperature;
+    }
+    if (originalRequest.top_p !== undefined) {
+      anthropicRequest.top_p = originalRequest.top_p;
+    }
+    if (originalRequest.top_k !== undefined) {
+      anthropicRequest.top_k = originalRequest.top_k;
+    }
+    if (originalRequest.stop_sequences) {
+      anthropicRequest.stop_sequences = originalRequest.stop_sequences;
+    }
+    if (originalRequest.metadata) {
+      anthropicRequest.metadata = originalRequest.metadata;
+    }
+    if (allTools.length > 0) {
+      anthropicRequest.tools = allTools;
+    }
+    if (originalRequest.tool_choice) {
+      anthropicRequest.tool_choice = originalRequest.tool_choice;
     }
 
     requestBody = JSON.stringify(anthropicRequest);

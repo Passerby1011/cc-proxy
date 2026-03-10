@@ -1,26 +1,26 @@
 /**
- * AI 请求上下文类
+ * AI 璇锋眰涓婁笅鏂囩被
  *
- * 核心类，封装所有 AI 请求所需的参数，在请求入口处创建，全流程传递。
- * 负责：
- * 1. 解析模型名前缀（cc+/chat+）
- * 2. 解析渠道名（channel+model）
- * 3. 查找渠道配置
- * 4. 应用透传逻辑
- * 5. 构建上游配置
- * 6. 增强请求（工具调用注入）
+ * 鏍稿績绫伙紝灏佽鎵€鏈?AI 璇锋眰鎵€闇€鐨勫弬鏁帮紝鍦ㄨ姹傚叆鍙ｅ鍒涘缓锛屽叏娴佺▼浼犻€掋€?
+ * 璐熻矗锛?
+ * 1. 瑙ｆ瀽妯″瀷鍚嶅墠缂€锛坈c+/chat+锛?
+ * 2. 瑙ｆ瀽娓犻亾鍚嶏紙channel+model锛?
+ * 3. 鏌ユ壘娓犻亾閰嶇疆
+ * 4. 搴旂敤閫忎紶閫昏緫
+ * 5. 鏋勫缓涓婃父閰嶇疆
+ * 6. 澧炲己璇锋眰锛堝伐鍏疯皟鐢ㄦ敞鍏ワ級
  */
 
 import { ClaudeRequest } from "../types.ts";
-import { ProxyConfig, ChannelConfig, resolveAutoTrigger } from "../config.ts";
+import { ChannelConfig, ProxyConfig, resolveAutoTrigger } from "../config.ts";
 import { ToolCallDelimiter } from "../signals.ts";
 import { enrichClaudeRequest } from "../prompt_inject.ts";
 import type {
-  UpstreamConfig,
-  RequestContextData,
   Protocol,
-  ToolCallMode,
+  RequestContextData,
   RequestFormat,
+  ToolCallMode,
+  UpstreamConfig,
 } from "./types.ts";
 
 export class RequestContext {
@@ -31,13 +31,13 @@ export class RequestContext {
   }
 
   /**
-   * 静态工厂方法：从原始请求创建 RequestContext
+   * 闈欐€佸伐鍘傛柟娉曪細浠庡師濮嬭姹傚垱寤?RequestContext
    *
-   * @param originalRequest 原始 Claude 请求
-   * @param config 代理配置
-   * @param requestId 请求 ID
-   * @param clientApiKey 客户端 API 密钥（用于透传）
-   * @returns RequestContext 实例
+   * @param originalRequest 鍘熷 Claude 璇锋眰
+   * @param config 浠ｇ悊閰嶇疆
+   * @param requestId 璇锋眰 ID
+   * @param clientApiKey 瀹㈡埛绔?API 瀵嗛挜锛堢敤浜庨€忎紶锛?
+   * @returns RequestContext 瀹炰緥
    */
   static fromRequest(
     originalRequest: ClaudeRequest,
@@ -45,26 +45,26 @@ export class RequestContext {
     requestId: string,
     clientApiKey?: string,
   ): RequestContext {
-    // 1. 解析模型名前缀和 autoTrigger 配置
+    // 1. 瑙ｆ瀽妯″瀷鍚嶅墠缂€鍜?autoTrigger 閰嶇疆
     const { autoTrigger, actualModelName, channelName } = resolveAutoTrigger(
       originalRequest.model,
       config.channelConfigs,
       config.webTools?.autoTrigger ?? true,
     );
 
-    // 2. 解析渠道信息
+    // 2. 瑙ｆ瀽娓犻亾淇℃伅
     const upstreamConfig = RequestContext.parseChannelInfo(
       actualModelName,
       config,
       clientApiKey,
     );
 
-    // 3. 确定工具调用模式
+    // 3. 纭畾宸ュ叿璋冪敤妯″紡
     const toolCallMode: ToolCallMode = upstreamConfig.supportsNativeToolCalling
       ? "native"
       : "prompt_injection";
 
-    // 4. 增强请求（仅在 prompt_injection 模式下才注入工具 XML）
+    // 4. 澧炲己璇锋眰锛堜粎鍦?prompt_injection 妯″紡涓嬫墠娉ㄥ叆宸ュ叿 XML锛?
     let enrichedRequest: ClaudeRequest;
     let delimiter: ToolCallDelimiter | undefined;
 
@@ -73,15 +73,15 @@ export class RequestContext {
       enrichedRequest = enrichResult.request;
       delimiter = enrichResult.delimiter;
     } else {
-      // 原生工具调用模式，不需要注入 XML，直接使用原始请求
+      // 鍘熺敓宸ュ叿璋冪敤妯″紡锛屼笉闇€瑕佹敞鍏?XML锛岀洿鎺ヤ娇鐢ㄥ師濮嬭姹?
       enrichedRequest = originalRequest;
       delimiter = undefined;
     }
 
-    // 5. 确定请求格式（当前仅支持 anthropic 格式）
+    // 5. 纭畾璇锋眰鏍煎紡锛堝綋鍓嶄粎鏀寔 anthropic 鏍煎紡锛?
     const requestFormat: RequestFormat = "anthropic";
 
-    // 6. 构建上下文数据
+    // 6. 鏋勫缓涓婁笅鏂囨暟鎹?
     const contextData: RequestContextData = {
       upstreamConfig,
       originalRequest,
@@ -98,17 +98,17 @@ export class RequestContext {
   }
 
   /**
-   * 静态工厂方法：从 UpstreamInfo 创建 RequestContext（用于工具拦截器中的辅助 AI 请求）
+   * 闈欐€佸伐鍘傛柟娉曪細浠?UpstreamInfo 鍒涘缓 RequestContext锛堢敤浜庡伐鍏锋嫤鎴櫒涓殑杈呭姪 AI 璇锋眰锛?
    *
-   * @param upstreamInfo 上游配置信息
-   * @param requestId 请求 ID
-   * @returns RequestContext 实例
+   * @param upstreamInfo 涓婃父閰嶇疆淇℃伅
+   * @param requestId 璇锋眰 ID
+   * @returns RequestContext 瀹炰緥
    */
   static fromUpstreamInfo(
     upstreamInfo: { baseUrl: string; apiKey?: string; model: string; protocol: Protocol },
     requestId: string,
   ): RequestContext {
-    // 创建一个最小化的 RequestContext 用于工具拦截器中的辅助 AI 请求
+    // 鍒涘缓涓€涓渶灏忓寲鐨?RequestContext 鐢ㄤ簬宸ュ叿鎷︽埅鍣ㄤ腑鐨勮緟鍔?AI 璇锋眰
     const upstreamConfig: UpstreamConfig = {
       baseUrl: upstreamInfo.baseUrl,
       apiKey: upstreamInfo.apiKey,
@@ -116,22 +116,22 @@ export class RequestContext {
       protocol: upstreamInfo.protocol,
     };
 
-    // 创建最小化的请求对象
+    // 鍒涘缓鏈€灏忓寲鐨勮姹傚璞?
     const minimalRequest: ClaudeRequest = {
       model: upstreamInfo.model,
       max_tokens: 4096,
       messages: [],
     };
 
-    // 创建最小化的配置对象（确保 defaultProtocol 类型正确）
+    // 鍒涘缓鏈€灏忓寲鐨勯厤缃璞★紙纭繚 defaultProtocol 绫诲瀷姝ｇ‘锛?
     const protocol = upstreamInfo.protocol === "gemini" ? "openai" : upstreamInfo.protocol;
     const minimalConfig: ProxyConfig = {
       upstreamBaseUrl: upstreamInfo.baseUrl,
       upstreamApiKey: upstreamInfo.apiKey,
       upstreamModelOverride: upstreamInfo.model,
       channelConfigs: [],
-      defaultProtocol: protocol as "openai" | "anthropic",
-      port: 0, // 占位值
+      defaultProtocol: protocol as "openai" | "openai-responses" | "anthropic",
+      port: 0, // 鍗犱綅鍊?
       host: "0.0.0.0",
       requestTimeoutMs: 120000,
       aggregationIntervalMs: 35,
@@ -155,14 +155,14 @@ export class RequestContext {
   }
 
   /**
-   * 解析渠道信息
+   * 瑙ｆ瀽娓犻亾淇℃伅
    *
-   * 处理 channel+model 格式，查找渠道配置，应用透传逻辑
+   * 澶勭悊 channel+model 鏍煎紡锛屾煡鎵炬笭閬撻厤缃紝搴旂敤閫忎紶閫昏緫
    *
-   * @param modelName 模型名（已移除 cc+/chat+ 前缀）
-   * @param config 代理配置
-   * @param clientApiKey 客户端 API 密钥
-   * @returns 上游配置
+   * @param modelName 妯″瀷鍚嶏紙宸茬Щ闄?cc+/chat+ 鍓嶇紑锛?
+   * @param config 浠ｇ悊閰嶇疆
+   * @param clientApiKey 瀹㈡埛绔?API 瀵嗛挜
+   * @returns 涓婃父閰嶇疆
    */
   private static parseChannelInfo(
     modelName: string,
@@ -173,13 +173,13 @@ export class RequestContext {
     let apiKey: string | undefined;
     let model: string;
     let protocol: Protocol;
-    let supportsNativeToolCalling: boolean = false; // 默认不支持原生工具调用
-    let supportsSystemPrompt: boolean = true; // 默认支持系统提示词
+    let supportsNativeToolCalling: boolean = false; // 榛樿涓嶆敮鎸佸師鐢熷伐鍏疯皟鐢?
+    let supportsSystemPrompt: boolean = true; // 榛樿鏀寔绯荤粺鎻愮ず璇?
 
     const plusIndex = modelName.indexOf("+");
 
     if (plusIndex !== -1) {
-      // 格式：channel+model
+      // 鏍煎紡锛歝hannel+model
       const channelName = modelName.slice(0, plusIndex);
       const actualModel = modelName.slice(plusIndex + 1);
       const channel = config.channelConfigs.find((c) => c.name === channelName);
@@ -192,7 +192,7 @@ export class RequestContext {
         supportsNativeToolCalling = channel.supportsNativeToolCalling ?? false;
         supportsSystemPrompt = channel.supportsSystemPrompt ?? true;
       } else {
-        // 渠道未找到，使用默认配置
+        // 娓犻亾鏈壘鍒帮紝浣跨敤榛樿閰嶇疆
         baseUrl = config.upstreamBaseUrl!;
         apiKey = config.upstreamApiKey;
         model = modelName;
@@ -200,7 +200,7 @@ export class RequestContext {
         supportsNativeToolCalling = false;
       }
     } else {
-      // 没有 + 号，使用默认渠道或全局配置
+      // 娌℃湁 + 鍙凤紝浣跨敤榛樿娓犻亾鎴栧叏灞€閰嶇疆
       if (config.channelConfigs.length > 0) {
         const channel = config.channelConfigs[0];
         baseUrl = channel.baseUrl;
@@ -218,7 +218,7 @@ export class RequestContext {
       }
     }
 
-    // 应用透传逻辑：如果启用透传且客户端提供了 API key，则优先使用客户端的 key
+    // 搴旂敤閫忎紶閫昏緫锛氬鏋滃惎鐢ㄩ€忎紶涓斿鎴风鎻愪緵浜?API key锛屽垯浼樺厛浣跨敤瀹㈡埛绔殑 key
     if (config.passthroughApiKey && clientApiKey) {
       apiKey = clientApiKey;
     }
@@ -233,104 +233,104 @@ export class RequestContext {
     };
   }
 
-  // ==================== 访问器方法 ====================
+  // ==================== 璁块棶鍣ㄦ柟娉?====================
 
   /**
-   * 获取上游配置
+   * 鑾峰彇涓婃父閰嶇疆
    */
   getUpstreamConfig(): UpstreamConfig {
     return this.data.upstreamConfig;
   }
 
   /**
-   * 获取原始请求
+   * 鑾峰彇鍘熷璇锋眰
    */
   getOriginalRequest(): ClaudeRequest {
     return this.data.originalRequest;
   }
 
   /**
-   * 获取增强后的请求
+   * 鑾峰彇澧炲己鍚庣殑璇锋眰
    */
   getEnrichedRequest(): ClaudeRequest {
     return this.data.enrichedRequest;
   }
 
   /**
-   * 获取工具调用分隔符
+   * 鑾峰彇宸ュ叿璋冪敤鍒嗛殧绗?
    */
   getDelimiter(): ToolCallDelimiter | undefined {
     return this.data.delimiter;
   }
 
   /**
-   * 获取代理配置
+   * 鑾峰彇浠ｇ悊閰嶇疆
    */
   getConfig(): ProxyConfig {
     return this.data.config;
   }
 
   /**
-   * 获取请求 ID
+   * 鑾峰彇璇锋眰 ID
    */
   getRequestId(): string {
     return this.data.requestId;
   }
 
   /**
-   * 获取请求格式
+   * 鑾峰彇璇锋眰鏍煎紡
    */
   getRequestFormat(): RequestFormat {
     return this.data.requestFormat;
   }
 
   /**
-   * 获取工具调用模式
+   * 鑾峰彇宸ュ叿璋冪敤妯″紡
    */
   getToolCallMode(): ToolCallMode {
     return this.data.toolCallMode;
   }
 
   /**
-   * 获取客户端 API 密钥
+   * 鑾峰彇瀹㈡埛绔?API 瀵嗛挜
    */
   getClientApiKey(): string | undefined {
     return this.data.clientApiKey;
   }
 
   /**
-   * 获取消息列表（使用增强后的请求）
+   * 鑾峰彇娑堟伅鍒楄〃锛堜娇鐢ㄥ寮哄悗鐨勮姹傦級
    */
   getMessages() {
     return this.data.enrichedRequest.messages;
   }
 
   /**
-   * 获取模型名（上游模型名）
+   * 鑾峰彇妯″瀷鍚嶏紙涓婃父妯″瀷鍚嶏級
    */
   getModel(): string {
     return this.data.upstreamConfig.model;
   }
 
   /**
-   * 是否启用流式输出
+   * 鏄惁鍚敤娴佸紡杈撳嚭
    */
   isStreamEnabled(): boolean {
     return this.data.originalRequest.stream === true;
   }
 
   /**
-   * 判断上游是否支持原生工具调用
+   * 鍒ゆ柇涓婃父鏄惁鏀寔鍘熺敓宸ュ叿璋冪敤
    *
-   * 📌 从渠道配置中读取 supportsNativeToolCalling 字段
-   * 🔮 未来扩展：根据 protocol 和上游能力判断
+   * 馃搶 浠庢笭閬撻厤缃腑璇诲彇 supportsNativeToolCalling 瀛楁
+   * 馃敭 鏈潵鎵╁睍锛氭牴鎹?protocol 鍜屼笂娓歌兘鍔涘垽鏂?
    */
   supportsNativeToolCall(): boolean {
     return this.data.upstreamConfig.supportsNativeToolCalling ?? false;
   }
 
   /**
-   * 获取完整的上下文数据（用于调试）
+   * 鑾峰彇瀹屾暣鐨勪笂涓嬫枃鏁版嵁锛堢敤浜庤皟璇曪級
    */
   getContextData(): RequestContextData {
     return { ...this.data };

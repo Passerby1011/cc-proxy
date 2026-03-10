@@ -1,63 +1,231 @@
-/**
- * 消息格式转换器
- *
- * 严格按照官方 API 格式规范实现 Anthropic ↔ OpenAI 消息格式转换
- *
- * 关键差异：
- * 1. 系统提示词：Anthropic 使用 system 字段，OpenAI 使用 system 角色消息
- * 2. 工具结果：Anthropic 在 user 消息的 content 数组中，OpenAI 使用独立的 tool 角色消息
- * 3. 内容格式：Anthropic 使用 content 数组，OpenAI 可以使用字符串或数组
- */
-
-import type {
-  ClaudeMessage,
+﻿import type {
   ClaudeContentBlock,
-  ClaudeTextBlock,
-  ClaudeToolUseBlock,
-  ClaudeToolResultBlock,
-  OpenAIChatMessage,
+  ClaudeImageBlock,
+  ClaudeMessage,
   ClaudeRequest,
+  ClaudeTextBlock,
+  ClaudeToolResultBlock,
+  ClaudeToolUseBlock,
+  OpenAIChatMessage,
+  OpenAIContentBlock,
 } from "../types.ts";
 import type { OpenAIToolMessage } from "./tool_format_converter.ts";
+import {
+  isAnthropicWebFetchTool,
+  isAnthropicWebSearchTool,
+  isOpenAIWebFetchTool,
+  isOpenAIWebSearchTool,
+  openAIWebFetchToolToAnthropic,
+  openAIWebSearchToolToAnthropic,
+} from "./types.ts";
 
-/**
- * OpenAI 请求格式
- */
+export const OPENAI_CHAT_PASSTHROUGH_METADATA_KEY = "_openai_chat_passthrough";
+
+const OPENAI_CHAT_PASSTHROUGH_KEYS = [
+  "presence_penalty",
+  "frequency_penalty",
+  "logit_bias",
+  "logprobs",
+  "top_logprobs",
+  "n",
+  "seed",
+  "stop",
+  "response_format",
+  "modalities",
+  "audio",
+  "parallel_tool_calls",
+  "user",
+  "reasoning_effort",
+  "max_completion_tokens",
+  "prediction",
+  "stream_options",
+  "service_tier",
+  "metadata",
+] as const;
+
+const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+// OpenAI Chat 请求的最小结构定义。
 export interface OpenAIRequest {
   model: string;
   messages: OpenAIChatMessage[];
   stream?: boolean;
   max_tokens?: number;
+  max_completion_tokens?: number;
   temperature?: number;
   top_p?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  logit_bias?: Record<string, number>;
+  logprobs?: boolean;
+  top_logprobs?: number;
+  n?: number;
+  seed?: number;
+  stop?: string | string[];
+  response_format?: Record<string, unknown>;
+  modalities?: string[];
+  audio?: Record<string, unknown>;
+  parallel_tool_calls?: boolean;
+  user?: string;
+  reasoning_effort?: string;
+  prediction?: Record<string, unknown>;
+  stream_options?: Record<string, unknown>;
+  service_tier?: string;
+  metadata?: Record<string, unknown>;
   tools?: any[];
   tool_choice?: any;
+  [key: string]: unknown;
 }
 
-/**
- * 消息格式转换器
- */
+function parseDataUrl(url: string): { mediaType: string; data: string } | undefined {
+  const match = /^data:([^;]+);base64,(.+)$/i.exec(url);
+  if (!match) return undefined;
+
+  const mediaType = match[1].toLowerCase();
+  if (!SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+    return undefined;
+  }
+
+  return {
+    mediaType,
+    data: match[2],
+  };
+}
+
+function openAIImageToClaude(
+  block: Extract<OpenAIContentBlock, { type: "image_url" }>,
+): ClaudeImageBlock | undefined {
+  const url = block.image_url?.url;
+  if (!url || typeof url !== "string") {
+    return undefined;
+  }
+
+  const parsed = parseDataUrl(url);
+  if (!parsed) {
+    return undefined;
+  }
+
+  return {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: parsed.mediaType as ClaudeImageBlock["source"]["media_type"],
+      data: parsed.data,
+    },
+  };
+}
+
+function claudeImageToOpenAI(
+  block: ClaudeImageBlock,
+): Extract<OpenAIContentBlock, { type: "image_url" }> {
+  return {
+    type: "image_url",
+    image_url: {
+      url: `data:${block.source.media_type};base64,${block.source.data}`,
+    },
+  };
+}
+
+function extractOpenAIContentBlocks(content: string | OpenAIContentBlock[] | null): ClaudeContentBlock[] {
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const blocks: ClaudeContentBlock[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      blocks.push({ type: "text", text: block.text });
+      continue;
+    }
+
+    if (block.type === "image_url") {
+      const image = openAIImageToClaude(block);
+      if (image) {
+        blocks.push(image);
+      }
+    }
+  }
+
+  return blocks;
+}
+
+function collapseOpenAIContent(blocks: OpenAIContentBlock[]): string | OpenAIContentBlock[] | null {
+  if (blocks.length === 0) {
+    return null;
+  }
+
+  const hasImage = blocks.some((block) => block.type === "image_url");
+  if (hasImage) {
+    return blocks;
+  }
+
+  return blocks
+    .filter((block): block is Extract<OpenAIContentBlock, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+}
+
+// 从 OpenAI 的 content 中提取纯文本内容。
+function extractOpenAIText(content: string | OpenAIContentBlock[] | null): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .filter((block): block is Extract<OpenAIContentBlock, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+}
+
+// 负责 OpenAI Chat 与 Anthropic Messages 之间的直接格式转换。
 export class MessageFormatConverter {
-  /**
-   * Anthropic 请求 → OpenAI 请求
-   *
-   * 关键转换：
-   * 1. 提取 system 字段，转为 system 角色消息（插入到消息列表头部）
-   * 2. 转换消息列表中的 tool_result 为 tool 角色消息
-   * 3. 转换消息列表中的 tool_use 为 assistant 消息（带 tool_calls）
-   * 
-   * @param request Anthropic 请求
-   * @param supportsSystemPrompt 是否支持系统提示词（默认 true，不支持时转换为 user 消息）
-   */
-  static anthropicToOpenAI(request: ClaudeRequest, supportsSystemPrompt: boolean = true): OpenAIRequest {
+  // 当 OpenAI 历史中存在连续 tool 消息、后面又没有紧跟 user 消息时，
+  // 需要主动补成一条 Anthropic user/tool_result 消息，避免上下文丢失。
+  private static flushPendingToolMessages(
+    toolMessages: OpenAIToolMessage[],
+    messages: ClaudeMessage[],
+  ): void {
+    if (toolMessages.length === 0) {
+      return;
+    }
+
+    messages.push({
+      role: "user",
+      content: toolMessages.map((toolMsg) => ({
+        type: "tool_result",
+        tool_use_id: toolMsg.tool_call_id,
+        content: toolMsg.content,
+      })),
+    });
+
+    toolMessages.length = 0;
+  }
+
+  // Anthropic 请求转换为 OpenAI Chat 请求。
+  static anthropicToOpenAI(
+    request: ClaudeRequest,
+    supportsSystemPrompt: boolean = true,
+  ): OpenAIRequest {
     const messages: OpenAIChatMessage[] = [];
 
-    // 1. 处理 system 提示词
     if (request.system) {
       const systemContent = typeof request.system === "string"
         ? request.system
         : request.system
-          .filter(block => block.type === "text")
+          .filter((block) => block.type === "text")
           .map((block: any) => block.text)
           .join("\n");
 
@@ -69,7 +237,6 @@ export class MessageFormatConverter {
       }
     }
 
-    // 2. 转换消息列表
     for (const message of request.messages) {
       if (message.role === "user") {
         this.convertAnthropicUserMessage(message, messages);
@@ -78,7 +245,7 @@ export class MessageFormatConverter {
       }
     }
 
-    return {
+    const result: OpenAIRequest = {
       model: request.model,
       messages,
       stream: request.stream,
@@ -88,17 +255,44 @@ export class MessageFormatConverter {
       tools: request.tools ? this.convertToolsToOpenAI(request.tools) : undefined,
       tool_choice: request.tool_choice,
     };
+
+    const metadata = (request.metadata && typeof request.metadata === "object")
+      ? request.metadata as Record<string, unknown>
+      : undefined;
+    const passthrough = (metadata?.[OPENAI_CHAT_PASSTHROUGH_METADATA_KEY] &&
+      typeof metadata[OPENAI_CHAT_PASSTHROUGH_METADATA_KEY] === "object")
+      ? metadata[OPENAI_CHAT_PASSTHROUGH_METADATA_KEY] as Record<string, unknown>
+      : undefined;
+
+    if (passthrough) {
+      for (const [key, value] of Object.entries(passthrough)) {
+        if (value === undefined) continue;
+        if ((result as Record<string, unknown>)[key] !== undefined) continue;
+        (result as Record<string, unknown>)[key] = value;
+      }
+    }
+
+    if ((result as Record<string, unknown>).stop === undefined) {
+      const stopSequences = (request as any).stop_sequences;
+      if (typeof stopSequences === "string") {
+        (result as Record<string, unknown>).stop = stopSequences;
+      } else if (Array.isArray(stopSequences)) {
+        const normalized = stopSequences.filter((item): item is string => typeof item === "string");
+        if (normalized.length > 0) {
+          (result as Record<string, unknown>).stop = normalized;
+        }
+      }
+    }
+
+    return result;
   }
 
-  /**
-   * 转换 Anthropic user 消息 → OpenAI user/tool 消息
-   */
+  // 将 Anthropic 的 user 消息拆成 OpenAI user / tool 消息。
   private static convertAnthropicUserMessage(
     message: ClaudeMessage,
     messages: OpenAIChatMessage[],
   ): void {
     if (typeof message.content === "string") {
-      // 简单文本消息
       messages.push({
         role: "user",
         content: message.content,
@@ -106,19 +300,21 @@ export class MessageFormatConverter {
       return;
     }
 
-    // content 是数组，需要分离 tool_result 和其他内容
-    const textBlocks: ClaudeTextBlock[] = [];
+    const contentBlocks: OpenAIContentBlock[] = [];
     const toolResultBlocks: ClaudeToolResultBlock[] = [];
 
     for (const block of message.content) {
       if (block.type === "text") {
-        textBlocks.push(block);
+        contentBlocks.push({ type: "text", text: block.text });
+      } else if (block.type === "image") {
+        contentBlocks.push(claudeImageToOpenAI(block));
+      } else if (block.type === "thinking") {
+        contentBlocks.push({ type: "text", text: `<thinking>${block.thinking}</thinking>` });
       } else if (block.type === "tool_result") {
         toolResultBlocks.push(block);
       }
     }
 
-    // 先添加 tool 角色消息（工具结果）
     for (const toolResult of toolResultBlocks) {
       const toolMessage: OpenAIToolMessage = {
         role: "tool",
@@ -130,25 +326,20 @@ export class MessageFormatConverter {
       messages.push(toolMessage as any);
     }
 
-    // 如果有文本内容，添加 user 消息
-    if (textBlocks.length > 0) {
-      const textContent = textBlocks.map(block => block.text).join("\n");
+    if (contentBlocks.length > 0) {
       messages.push({
         role: "user",
-        content: textContent,
+        content: collapseOpenAIContent(contentBlocks) ?? "",
       });
     }
   }
 
-  /**
-   * 转换 Anthropic assistant 消息 → OpenAI assistant 消息
-   */
+  // 将 Anthropic assistant 消息转换为 OpenAI assistant 消息。
   private static convertAnthropicAssistantMessage(
     message: ClaudeMessage,
     messages: OpenAIChatMessage[],
   ): void {
     if (typeof message.content === "string") {
-      // 简单文本消息
       messages.push({
         role: "assistant",
         content: message.content,
@@ -156,162 +347,174 @@ export class MessageFormatConverter {
       return;
     }
 
-    // content 是数组，可能包含 text 和 tool_use
-    const textBlocks: ClaudeTextBlock[] = [];
+    const contentBlocks: OpenAIContentBlock[] = [];
     const toolUseBlocks: ClaudeToolUseBlock[] = [];
 
     for (const block of message.content) {
       if (block.type === "text") {
-        textBlocks.push(block);
+        contentBlocks.push({ type: "text", text: block.text });
+      } else if (block.type === "image") {
+        contentBlocks.push(claudeImageToOpenAI(block));
+      } else if (block.type === "thinking") {
+        contentBlocks.push({ type: "text", text: `<thinking>${block.thinking}</thinking>` });
       } else if (block.type === "tool_use") {
         toolUseBlocks.push(block);
       }
     }
 
-    // 构建 assistant 消息
-    const textContent = textBlocks.map(block => block.text).join("\n");
+    const collapsed = collapseOpenAIContent(contentBlocks);
 
     if (toolUseBlocks.length > 0) {
-      // 有工具调用，需要构建 tool_calls
-      const toolCalls = toolUseBlocks.map(toolUse => ({
-        id: toolUse.id,
-        type: "function" as const,
-        function: {
-          name: toolUse.name,
-          arguments: JSON.stringify(toolUse.input),
-        },
-      }));
-
       messages.push({
         role: "assistant",
-        content: textContent || null, // OpenAI 要求有 tool_calls 时 content 可以为 null
-        tool_calls: toolCalls,
+        content: collapsed,
+        tool_calls: toolUseBlocks.map((toolUse) => ({
+          id: toolUse.id,
+          type: "function" as const,
+          function: {
+            name: toolUse.name,
+            arguments: JSON.stringify(toolUse.input),
+          },
+        })),
       } as any);
-    } else {
-      // 只有文本，普通 assistant 消息
-      messages.push({
-        role: "assistant",
-        content: textContent,
-      });
+      return;
     }
+
+    messages.push({
+      role: "assistant",
+      content: collapsed ?? "",
+    });
   }
 
-  /**
-   * 转换工具定义（简化版，实际应使用 ToolFormatConverter）
-   */
+  // 工具定义从 Anthropic 转到 OpenAI。
   private static convertToolsToOpenAI(tools: any[]): any[] {
-    return tools.map(tool => ({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.input_schema,
-      },
-    }));
+    return tools.map((tool) => {
+      if (isAnthropicWebSearchTool(tool)) {
+        return {
+          type: "web_search_preview",
+          user_location: tool.user_location,
+          allowed_domains: tool.allowed_domains,
+          blocked_domains: tool.blocked_domains,
+        };
+      }
+
+      if (isAnthropicWebFetchTool(tool)) {
+        return {
+          type: "web_fetch",
+        };
+      }
+
+      return {
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema ?? { type: "object", properties: {} },
+        },
+      };
+    });
   }
 
-  /**
-   * OpenAI 请求 → Anthropic 请求
-   *
-   * 关键转换：
-   * 1. 提取 system 角色消息，转为 system 字段
-   * 2. 转换 tool 角色消息为 tool_result（放入 user 消息的 content 数组）
-   * 3. 转换 assistant 消息中的 tool_calls 为 tool_use
-   */
+  // OpenAI Chat 请求转换为 Anthropic 请求。
   static openAIToAnthropic(request: OpenAIRequest): ClaudeRequest {
     const messages: ClaudeMessage[] = [];
     let systemPrompt: string | undefined;
-
-    // 1. 处理消息列表
     const toolMessages: OpenAIToolMessage[] = [];
 
-    for (let i = 0; i < request.messages.length; i++) {
-      const message = request.messages[i];
-
+    for (const message of request.messages) {
       if (message.role === "system") {
-        // 提取 system 提示词
         if (!systemPrompt) {
-          systemPrompt = typeof message.content === "string"
-            ? message.content
-            : JSON.stringify(message.content);
+          systemPrompt = extractOpenAIText(message.content);
         }
-      } else if (message.role === "tool") {
-        // 收集 tool 消息，稍后合并到 user 消息
-        toolMessages.push(message as any);
-      } else if (message.role === "user") {
-        // 检查是否需要合并 tool 消息
-        const content: ClaudeContentBlock[] = [];
+        continue;
+      }
 
-        // 先添加收集的 tool_result
+      if (message.role === "tool") {
+        toolMessages.push(message as OpenAIToolMessage);
+        continue;
+      }
+
+      if (message.role === "user") {
+        const content: ClaudeContentBlock[] = [];
         for (const toolMsg of toolMessages) {
           content.push({
             type: "tool_result",
-            tool_use_id: (toolMsg as any).tool_call_id,
+            tool_use_id: toolMsg.tool_call_id,
             content: toolMsg.content,
           });
         }
-        toolMessages.length = 0; // 清空
+        toolMessages.length = 0;
 
-        // 添加当前 user 消息的内容
-        if (typeof message.content === "string") {
-          content.push({
-            type: "text",
-            text: message.content,
+        content.push(...extractOpenAIContentBlocks(message.content));
+
+        if (content.length > 0) {
+          messages.push({
+            role: "user",
+            content: content.length === 1 && content[0].type === "text"
+              ? (content[0] as ClaudeTextBlock).text
+              : content,
           });
         }
+        continue;
+      }
 
-        messages.push({
-          role: "user",
-          content: content.length === 1 && content[0].type === "text"
-            ? (content[0] as ClaudeTextBlock).text
-            : content,
-        });
-      } else if (message.role === "assistant") {
-        // 转换 assistant 消息
-        this.convertOpenAIAssistantMessage(message, messages);
+      this.flushPendingToolMessages(toolMessages, messages);
+      this.convertOpenAIAssistantMessage(message, messages);
+    }
+
+    this.flushPendingToolMessages(toolMessages, messages);
+
+    const passthrough: Record<string, unknown> = {};
+    for (const key of OPENAI_CHAT_PASSTHROUGH_KEYS) {
+      const value = request[key];
+      if (value !== undefined) {
+        passthrough[key] = value;
       }
     }
 
+    const maxTokens = request.max_tokens ?? request.max_completion_tokens ?? 4096;
     const result: ClaudeRequest = {
       model: request.model,
       messages,
       system: systemPrompt,
       stream: request.stream,
-      max_tokens: request.max_tokens || 4096,
+      max_tokens: maxTokens,
       temperature: request.temperature,
       top_p: request.top_p,
     };
 
-    // 只在有值时添加这些字段
+    if (request.stop !== undefined) {
+      const stopSequences = Array.isArray(request.stop)
+        ? request.stop.filter((item): item is string => typeof item === "string")
+        : [request.stop].filter((item): item is string => typeof item === "string");
+      if (stopSequences.length > 0) {
+        (result as any).stop_sequences = stopSequences;
+      }
+    }
+
     if (request.tools) {
       result.tools = this.convertToolsToAnthropic(request.tools);
     }
     if (request.tool_choice) {
       result.tool_choice = request.tool_choice;
     }
+    if (Object.keys(passthrough).length > 0) {
+      result.metadata = {
+        [OPENAI_CHAT_PASSTHROUGH_METADATA_KEY]: passthrough,
+      };
+    }
 
     return result;
   }
 
-  /**
-   * 转换 OpenAI assistant 消息 → Anthropic assistant 消息
-   */
+  // 将 OpenAI assistant 消息转换为 Anthropic assistant 消息。
   private static convertOpenAIAssistantMessage(
     message: OpenAIChatMessage,
     messages: ClaudeMessage[],
   ): void {
-    const content: ClaudeContentBlock[] = [];
+    const content: ClaudeContentBlock[] = extractOpenAIContentBlocks(message.content);
 
-    // 添加文本内容
-    if (message.content && typeof message.content === "string") {
-      content.push({
-        type: "text",
-        text: message.content,
-      });
-    }
-
-    // 添加工具调用
-    if ((message as any).tool_calls) {
+    if (Array.isArray((message as any).tool_calls)) {
       for (const toolCall of (message as any).tool_calls) {
         let input: Record<string, unknown>;
         try {
@@ -337,14 +540,22 @@ export class MessageFormatConverter {
     });
   }
 
-  /**
-   * 转换工具定义（简化版，实际应使用 ToolFormatConverter）
-   */
+  // 工具定义从 OpenAI 转到 Anthropic。
   private static convertToolsToAnthropic(tools: any[]): any[] {
-    return tools.map(tool => ({
-      name: tool.function.name,
-      description: tool.function.description,
-      input_schema: tool.function.parameters,
-    }));
+    return tools.map((tool) => {
+      if (isOpenAIWebSearchTool(tool)) {
+        return openAIWebSearchToolToAnthropic(tool);
+      }
+
+      if (isOpenAIWebFetchTool(tool)) {
+        return openAIWebFetchToolToAnthropic(tool);
+      }
+
+      return {
+        name: tool.function.name,
+        description: tool.function.description,
+        input_schema: tool.function.parameters,
+      };
+    });
   }
 }

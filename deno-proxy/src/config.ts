@@ -1,49 +1,53 @@
 /// <reference lib="deno.ns" />
 
+// 单个上游渠道的配置。
 export interface ChannelConfig {
-  name: string; // 渠道名称，用于 channel+model 格式
+  name: string; 
   baseUrl: string;
   apiKey?: string;
-  protocol?: "openai" | "anthropic"; // 渠道协议类型，默认为 openai
-  autoTrigger?: boolean; // 渠道级拦截触发模式（可选，未设置则使用全局配置）
-  supportsNativeToolCalling?: boolean; // 是否支持原生工具调用（默认 false，使用 XML 注入）
-  supportsSystemPrompt?: boolean; // 是否支持系统提示词（默认 true，不支持时转换为 user 消息）
+  protocol?: "openai" | "openai-responses" | "anthropic"; 
+  autoTrigger?: boolean; 
+  supportsNativeToolCalling?: boolean; 
+  supportsSystemPrompt?: boolean; 
 }
 
+// 工具调用纠错重试配置。
 export interface ToolCallRetryConfig {
-  enabled: boolean;              // 是否启用重试（默认 false）
-  maxRetries: number;            // 最大重试次数（默认 1）
-  timeout: number;               // 单次重试超时（默认 30000ms）
-  strategy: 'correction';        // 固定使用修正提示策略
-  keepAlive: boolean;            // 重试期间保持连接（默认 true）
-  promptTemplate?: string;       // 自定义修正提示模板
+  enabled: boolean; 
+  maxRetries: number; 
+  timeout: number; 
+  strategy: "correction"; 
+  keepAlive: boolean; 
+  promptTemplate?: string; 
 }
 
+// Firecrawl 相关配置。
 export interface FirecrawlConfig {
-  apiKey: string;                // Firecrawl API 密钥
-  baseUrl: string;               // Firecrawl API 基础 URL
-  timeout: number;               // 请求超时时间（ms）
-  maxRetries: number;            // 最大重试次数
-  retryDelay: number;            // 重试延迟（ms）
+  apiKey: string; 
+  baseUrl: string; 
+  timeout: number; 
+  maxRetries: number; 
+  retryDelay: number; 
 }
 
+// Web 工具拦截与深度浏览配置。
 export interface WebToolsConfig {
-  enableSearchIntercept: boolean;  // 是否启用 Web Search 拦截
-  enableFetchIntercept: boolean;   // 是否启用 Web Fetch 拦截
-  searchMode: "simple" | "smart";  // Web Search 工作模式
-  autoTrigger: boolean;            // 是否自动触发（true=看到工具就执行，false=等AI调用）
-  deepBrowseEnabled: boolean;      // 是否启用深入浏览（智能模式）
-  deepBrowseCount: number;         // 深入浏览的页面数量（1-5）
-  deepBrowsePageContentLimit: number; // 深入浏览每个页面内容字符数限制（默认 5000）
-  maxSearchResults: number;        // 最大搜索结果数量
-  maxFetchContentTokens: number;   // Web Fetch 内容最大 token 数
+  enableSearchIntercept: boolean; 
+  enableFetchIntercept: boolean; 
+  searchMode: "simple" | "smart"; 
+  autoTrigger: boolean; 
+  deepBrowseEnabled: boolean; 
+  deepBrowseCount: number; 
+  deepBrowsePageContentLimit: number; 
+  maxSearchResults: number; 
+  maxFetchContentTokens: number; 
 }
 
+// 代理服务的完整运行配置。
 export interface ProxyConfig {
   port: number;
   host: string;
-  channelConfigs: ChannelConfig[]; // 渠道配置，用于 channel+model 格式
-  // 向后兼容的旧字段（如果未设置渠道配置则使用）
+  channelConfigs: ChannelConfig[]; 
   upstreamBaseUrl?: string;
   upstreamApiKey?: string;
   upstreamModelOverride?: string;
@@ -53,46 +57,33 @@ export interface ProxyConfig {
   maxRequestsPerMinute: number;
   tokenMultiplier: number;
   autoPort: boolean;
-  passthroughApiKey: boolean; // 是否将客户端 API key 透传给上游
-  defaultProtocol: "openai" | "anthropic"; // 默认上游协议
-  // Web UI 管理配置
+  passthroughApiKey: boolean; 
+  defaultProtocol: "openai" | "openai-responses" | "anthropic"; 
   adminApiKey?: string;
   pgStoreDsn?: string;
   configFilePath?: string;
-  // 工具调用重试配置
   toolCallRetry?: ToolCallRetryConfig;
-  // Firecrawl 配置
   firecrawl?: FirecrawlConfig;
-  // Web Search/Fetch 配置
   webTools?: WebToolsConfig;
 }
 
-/**
- * 存储层接口定义
- */
 export interface ConfigStorage {
   load(): Promise<Partial<ProxyConfig>>;
   save(config: Partial<ProxyConfig>): Promise<void>;
   healthCheck(): Promise<boolean>;
 }
 
-// 解析 TOKEN_MULTIPLIER，兼容常见字符串形式：
-// - "1.2" / "0.8"
-// - "1.2x" / "x1.2"
-// - "120%" （表示 1.2）
-// - 带引号或空格的写法："'1.2'" / " 1.2 "
+// 解析 token 倍率配置，兼容百分比和 x 倍写法。
 function parseTokenMultiplier(raw: string | undefined): number {
   if (!raw) return 1.0;
 
   let s = raw.trim();
   if (!s) return 1.0;
 
-  // 去掉包裹的引号
-  if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
     s = s.slice(1, -1).trim();
   }
 
-  // 支持百分号写法：120% -> 1.2
   if (s.endsWith("%")) {
     const num = parseFloat(s.slice(0, -1));
     if (Number.isFinite(num) && num > 0) {
@@ -100,7 +91,6 @@ function parseTokenMultiplier(raw: string | undefined): number {
     }
   }
 
-  // 支持带 x 的写法：1.2x / x1.2
   if (s.toLowerCase().endsWith("x")) {
     s = s.slice(0, -1).trim();
   } else if (s.toLowerCase().startsWith("x")) {
@@ -114,13 +104,11 @@ function parseTokenMultiplier(raw: string | undefined): number {
   return num;
 }
 
-/**
- * 根据 URL 自动识别协议类型
- */
+// 根据 URL、模型名和默认值推断上游协议。
 export function detectProtocol(
   baseUrl: string,
-  defaultProtocol: "openai" | "anthropic",
-): "openai" | "anthropic" {
+  defaultProtocol: "openai" | "openai-responses" | "anthropic",
+): "openai" | "openai-responses" | "anthropic" {
   try {
     const url = new URL(baseUrl);
     const path = url.pathname;
@@ -128,13 +116,18 @@ export function detectProtocol(
     if (path.endsWith("/v1/chat/completions")) {
       return "openai";
     }
+    if (path.endsWith("/v1/responses")) {
+      return "openai-responses";
+    }
     if (path.endsWith("/v1/messages")) {
       return "anthropic";
     }
   } catch (_e) {
-    // 如果 URL 解析失败，尝试简单的字符串匹配
     if (baseUrl.includes("/v1/chat/completions")) {
       return "openai";
+    }
+    if (baseUrl.includes("/v1/responses")) {
+      return "openai-responses";
     }
     if (baseUrl.includes("/v1/messages")) {
       return "anthropic";
@@ -144,7 +137,10 @@ export function detectProtocol(
   return defaultProtocol;
 }
 
-function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelConfig[] {
+// 从环境变量加载渠道配置列表。
+function loadChannelConfigs(
+  defaultProtocol: "openai" | "openai-responses" | "anthropic",
+): ChannelConfig[] {
   const configs: ChannelConfig[] = [];
   let i = 1;
   while (true) {
@@ -157,40 +153,32 @@ function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelCon
     const rawSupportsSystemPrompt = Deno.env.get(`CHANNEL_${i}_SUPPORTS_SYSTEM_PROMPT`);
 
     if (!name || !baseUrl) {
-      // 如果缺少必要字段，停止搜索
       break;
     }
 
-    // 自动识别协议
-    const protocol = (rawProtocol as "openai" | "anthropic") ||
+    const protocol = (rawProtocol as "openai" | "openai-responses" | "anthropic") ||
       detectProtocol(baseUrl, defaultProtocol);
 
-    // 解析 autoTrigger（可选配置）
     let autoTrigger: boolean | undefined;
     if (rawAutoTrigger === "true") {
       autoTrigger = true;
     } else if (rawAutoTrigger === "false") {
       autoTrigger = false;
     }
-    // 如果未设置，保持 undefined，使用全局配置
 
-    // 解析 supportsNativeToolCalling（可选配置，默认 false）
     let supportsNativeToolCalling: boolean | undefined;
     if (rawSupportsNativeToolCalling === "true") {
       supportsNativeToolCalling = true;
     } else if (rawSupportsNativeToolCalling === "false") {
       supportsNativeToolCalling = false;
     }
-    // 如果未设置，保持 undefined，使用默认值 false
 
-    // 解析 supportsSystemPrompt（可选配置，默认 true）
     let supportsSystemPrompt: boolean | undefined;
     if (rawSupportsSystemPrompt === "true") {
       supportsSystemPrompt = true;
     } else if (rawSupportsSystemPrompt === "false") {
       supportsSystemPrompt = false;
     }
-    // 如果未设置，保持 undefined，使用默认值 true
 
     configs.push({
       name,
@@ -206,35 +194,31 @@ function loadChannelConfigs(defaultProtocol: "openai" | "anthropic"): ChannelCon
   return configs;
 }
 
+// 从环境变量构建完整代理配置。
 export function loadConfig(): ProxyConfig {
   const adminApiKey = Deno.env.get("ADMIN_API_KEY");
   const pgStoreDsn = Deno.env.get("PGSTORE_DSN");
   const configFilePath = Deno.env.get("CONFIG_FILE_PATH");
 
-  // 检查是否启用自动端口配置
   const autoPort = Deno.env.get("AUTO_PORT") === "true";
-  
-  // 如果启用自动端口，则使用 0 让系统自动分配端口
-  // 否则使用环境变量指定的端口或默认端口 3456
+
   const port = autoPort ? 0 : Number(Deno.env.get("PORT") ?? "3456");
   const host = Deno.env.get("HOST") ?? "0.0.0.0";
   const clientApiKey = Deno.env.get("CLIENT_API_KEY");
   const requestTimeoutMs = Number(Deno.env.get("TIMEOUT_MS") ?? "120000");
   const aggregationIntervalMs = Number(Deno.env.get("AGGREGATION_INTERVAL_MS") ?? "35");
   const maxRequestsPerMinute = Number(Deno.env.get("MAX_REQUESTS_PER_MINUTE") ?? "10");
-  // 解析 tokenMultiplier，并对非法值进行兜底，避免出现 NaN/Infinity
   const tokenMultiplier = parseTokenMultiplier(Deno.env.get("TOKEN_MULTIPLIER"));
 
-  // 是否透传客户端 API key
   const passthroughApiKey = Deno.env.get("PASSTHROUGH_API_KEY") === "true";
 
-  // 默认协议
-  const defaultProtocol = (Deno.env.get("UPSTREAM_PROTOCOL") ?? "openai") as "openai" | "anthropic";
+  const defaultProtocol = (Deno.env.get("UPSTREAM_PROTOCOL") ?? "openai") as
+    | "openai"
+    | "openai-responses"
+    | "anthropic";
 
-  // 加载渠道配置
   const channelConfigs = loadChannelConfigs(defaultProtocol);
 
-  // 向后兼容：如果未设置任何渠道配置，则使用旧的环境变量
   let upstreamBaseUrl: string | undefined;
   let upstreamApiKey: string | undefined;
   let upstreamModelOverride: string | undefined;
@@ -246,7 +230,6 @@ export function loadConfig(): ProxyConfig {
     upstreamModelOverride = Deno.env.get("UPSTREAM_MODEL");
   }
 
-  // 加载工具调用重试配置
   const toolCallRetryEnabled = Deno.env.get("TOOL_RETRY_ENABLED") === "true";
   let toolCallRetry: ToolCallRetryConfig | undefined;
 
@@ -255,13 +238,12 @@ export function loadConfig(): ProxyConfig {
       enabled: true,
       maxRetries: Number(Deno.env.get("TOOL_RETRY_MAX_RETRIES") ?? "1"),
       timeout: Number(Deno.env.get("TOOL_RETRY_TIMEOUT") ?? "30000"),
-      strategy: 'correction',
-      keepAlive: Deno.env.get("TOOL_RETRY_KEEP_ALIVE") !== "false", // 默认 true
+      strategy: "correction",
+      keepAlive: Deno.env.get("TOOL_RETRY_KEEP_ALIVE") !== "false", 
       promptTemplate: Deno.env.get("TOOL_RETRY_PROMPT_TEMPLATE"),
     };
   }
 
-  // 加载 Firecrawl 配置
   const firecrawlApiKey = Deno.env.get("FIRECRAWL_API_KEY");
   let firecrawl: FirecrawlConfig | undefined;
 
@@ -275,7 +257,6 @@ export function loadConfig(): ProxyConfig {
     };
   }
 
-  // 加载 Web Tools 配置
   let webTools: WebToolsConfig | undefined;
 
   const enableSearchIntercept = Deno.env.get("ENABLE_WEB_SEARCH_INTERCEPT") === "true";
@@ -286,7 +267,7 @@ export function loadConfig(): ProxyConfig {
       enableSearchIntercept,
       enableFetchIntercept,
       searchMode: (Deno.env.get("WEB_SEARCH_MODE") ?? "smart") as "simple" | "smart",
-      autoTrigger: Deno.env.get("WEB_TOOLS_AUTO_TRIGGER") !== "false", // 默认 true，自动触发
+      autoTrigger: Deno.env.get("WEB_TOOLS_AUTO_TRIGGER") !== "false", 
       deepBrowseEnabled: Deno.env.get("DEEP_BROWSE_ENABLED") === "true",
       deepBrowseCount: Number(Deno.env.get("DEEP_BROWSE_COUNT") ?? "3"),
       deepBrowsePageContentLimit: Number(Deno.env.get("DEEP_BROWSE_PAGE_CONTENT_LIMIT") ?? "5000"),
@@ -319,24 +300,14 @@ export function loadConfig(): ProxyConfig {
   };
 }
 
-/**
- * 解析模型名并确定最终的 autoTrigger 配置
- * 优先级：模型名前缀 > 渠道配置 > 全局配置
- *
- * @param modelName - 完整的模型名（可能包含 cc+ 或 chat+ 前缀）
- * @param channel - 渠道配置（可选）
- * @param globalAutoTrigger - 全局 autoTrigger 配置
- * @returns { autoTrigger: boolean, actualModelName: string, channelName?: string }
- */
+// 解析是否自动触发 Web 工具，并返回实际模型名与渠道名。
 export function resolveAutoTrigger(
   modelName: string,
   channelConfigs: ChannelConfig[],
-  globalAutoTrigger: boolean
+  globalAutoTrigger: boolean,
 ): { autoTrigger: boolean; actualModelName: string; channelName?: string } {
-  // 1. 检查模型名前缀（最高优先级）
   if (modelName.startsWith("cc+")) {
-    // cc+ 前缀 → 强制自动触发模式
-    const rest = modelName.slice(3); // 移除 "cc+"
+    const rest = modelName.slice(3); 
     const plusIndex = rest.indexOf("+");
     if (plusIndex !== -1) {
       return {
@@ -349,8 +320,7 @@ export function resolveAutoTrigger(
   }
 
   if (modelName.startsWith("chat+")) {
-    // chat+ 前缀 → 强制按需拦截模式
-    const rest = modelName.slice(5); // 移除 "chat+"
+    const rest = modelName.slice(5); 
     const plusIndex = rest.indexOf("+");
     if (plusIndex !== -1) {
       return {
@@ -362,7 +332,6 @@ export function resolveAutoTrigger(
     return { autoTrigger: false, actualModelName: rest };
   }
 
-  // 2. 检查渠道配置（次优先级）
   const plusIndex = modelName.indexOf("+");
   if (plusIndex !== -1) {
     const channelName = modelName.slice(0, plusIndex);
@@ -376,6 +345,5 @@ export function resolveAutoTrigger(
     }
   }
 
-  // 3. 使用全局配置（默认）
   return { autoTrigger: globalAutoTrigger, actualModelName: modelName };
 }

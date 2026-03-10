@@ -8,7 +8,7 @@
  * - OpenAI: https://platform.openai.com/docs/guides/function-calling
  */
 
-import type { ClaudeToolDefinition, ClaudeToolUseBlock, ClaudeToolResultBlock } from "../types.ts";
+import type { ClaudeToolDefinition, ClaudeToolResultBlock, ClaudeToolUseBlock } from "../types.ts";
 
 /**
  * OpenAI 工具定义格式
@@ -71,12 +71,12 @@ export class ToolDefinitionConverter {
    * }
    */
   static anthropicToOpenAI(tools: ClaudeToolDefinition[]): OpenAIToolDefinition[] {
-    return tools.map(tool => ({
+    return tools.map((tool) => ({
       type: "function" as const,
       function: {
         name: tool.name,
         description: tool.description,
-        parameters: tool.input_schema,
+        parameters: tool.input_schema ?? { type: "object", properties: {} },
       },
     }));
   }
@@ -85,7 +85,7 @@ export class ToolDefinitionConverter {
    * OpenAI 工具定义 → Anthropic 工具定义
    */
   static openAIToAnthropic(tools: OpenAIToolDefinition[]): ClaudeToolDefinition[] {
-    return tools.map(tool => ({
+    return tools.map((tool) => ({
       name: tool.function.name,
       description: tool.function.description,
       input_schema: tool.function.parameters,

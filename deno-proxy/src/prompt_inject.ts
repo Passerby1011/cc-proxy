@@ -58,25 +58,41 @@ When you need to call a tool, you MUST use this EXACT format at the END of your 
 - ARGS_END: {ARGS_END}
 `;
 
-// 思考模式相关的常量定义
+// 用于包裹思考内容的标记。
 const THINKING_START_TAG = "<thinking>";
 const THINKING_END_TAG = "</thinking>";
 
+// 对注入模板中的文本做 XML 转义，避免工具描述破坏结构。
 function escapeText(text: string): string {
-  return text.replace(/</g, "<").replace(/>/g, ">");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
+// 将工具定义渲染成注入模板使用的 XML 片段。
 function buildToolsXml(tools: ClaudeToolDefinition[]): string {
   if (!tools.length) return "<function_list>None</function_list>";
+
   const items = tools.map((tool, index) => {
-    // 对于 Anthropic 原生工具（web_search_20250305, web_fetch_20250910），使用 type 作为名称
-    const isWebSearchTool = (tool as any).type === 'web_search_20250305';
-    const isWebFetchTool = (tool as any).type === 'web_fetch_20250910';
+    // Web 工具既可能是 Anthropic 风格，也可能是 OpenAI 风格。
+    const toolType = (tool as any).type;
+    const isWebSearchTool =
+      toolType === "web_search_20250305" ||
+      toolType === "web_search_preview" ||
+      toolType === "web_search";
+    const isWebFetchTool =
+      toolType === "web_fetch_20250910" ||
+      toolType === "web_fetch" ||
+      toolType === "web_fetch_preview";
+
     const toolName = (isWebSearchTool || isWebFetchTool)
       ? (tool as any).type
       : tool.name;
 
-    // 为官方 web 工具手动定义 schema（因为它们的 input_schema 为空）
+    // 官方 Web 工具有时没有完整 schema，这里补齐一份最小可用定义。
     let schema = tool.input_schema ?? {};
     if (isWebSearchTool) {
       schema = {
@@ -84,18 +100,18 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
         properties: {
           query: {
             type: "string",
-            description: "The search query to execute"
+            description: "The search query to execute",
           },
           allowed_domains: {
             type: "array",
-            description: "Optional list of allowed domains to restrict search results"
+            description: "Optional list of allowed domains to restrict search results",
           },
           blocked_domains: {
             type: "array",
-            description: "Optional list of blocked domains to exclude from search results"
-          }
+            description: "Optional list of blocked domains to exclude from search results",
+          },
         },
-        required: ["query"]
+        required: ["query"],
       };
     } else if (isWebFetchTool) {
       schema = {
@@ -103,10 +119,10 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
         properties: {
           url: {
             type: "string",
-            description: "The URL to fetch and scrape"
-          }
+            description: "The URL to fetch and scrape",
+          },
         },
-        required: ["url"]
+        required: ["url"],
       };
     }
 
@@ -143,12 +159,11 @@ function buildToolsXml(tools: ClaudeToolDefinition[]): string {
       "  </tool>",
     ].join("\n");
   }).join("\n");
+
   return `<function_list>\n${items}\n</function_list>`;
 }
 
-/**
- * 将工具消息块（tool_use, tool_result）和思考块转换为文本格式，同时保留图片块
- */
+// 将消息中的工具块、思考块规范化为文本块，便于走提示词注入链路。
 function normalizeBlocks(
   content: string | ClaudeContentBlock[],
   delimiter: ToolCallDelimiter,
@@ -204,57 +219,133 @@ function normalizeBlocks(
   return result;
 }
 
+function serializeToolResult(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((item: any) => item && item.type === "text")
+      .map((item: any) => item.text || "")
+      .join("\n");
+  }
+  if (content && typeof content === "object") {
+    return JSON.stringify(content, null, 2);
+  }
+  return "";
+}
+
+function hasCompatibilitySensitiveBlocks(content: string | ClaudeContentBlock[]): boolean {
+  if (typeof content === "string") return false;
+  return content.some((block) =>
+    block.type === "tool_use" || block.type === "tool_result" || block.type === "thinking"
+  );
+}
+
+function normalizeHistoryBlocksForCompatibility(
+  content: string | ClaudeContentBlock[],
+): string | ClaudeContentBlock[] {
+  if (typeof content === "string") return content;
+
+  const normalized: ClaudeContentBlock[] = [];
+  for (const block of content) {
+    if (block.type === "text" || block.type === "image") {
+      normalized.push(block);
+    } else if (block.type === "thinking") {
+      normalized.push({ type: "text", text: `${THINKING_START_TAG}${block.thinking}${THINKING_END_TAG}` });
+    } else if (block.type === "tool_use") {
+      normalized.push({
+        type: "text",
+        text: `[Assistant Tool Call]\nName: ${block.name}\nArguments: ${JSON.stringify(block.input ?? {})}`,
+      });
+    } else if (block.type === "tool_result") {
+      normalized.push({
+        type: "text",
+        text: `[Tool Result${block.tool_use_id ? ` ${block.tool_use_id}` : ""}]\n${serializeToolResult(block.content)}`,
+      });
+    }
+  }
+
+  const hasNonTextBlocks = normalized.some((block) => block.type !== "text");
+  if (!hasNonTextBlocks) {
+    return normalized
+      .map((block) => block.type === "text" ? block.text : "")
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return normalized;
+}
+
+function normalizeSystemForCompatibility(
+  system: string | ClaudeContentBlock[] | undefined,
+): string | ClaudeContentBlock[] | undefined {
+  if (!system) return system;
+  if (!hasCompatibilitySensitiveBlocks(system)) return system;
+  return normalizeHistoryBlocksForCompatibility(system);
+}
+
 export interface EnrichedClaudeRequest {
   request: ClaudeRequest;
   delimiter?: ToolCallDelimiter;
 }
 
-/**
- * 增强 ClaudeRequest：注入工具定义并处理消息中的工具块
- */
+// 为不支持原生工具调用的上游注入工具说明，并规范化历史消息。
 export function enrichClaudeRequest(request: ClaudeRequest): EnrichedClaudeRequest {
   const tools = request.tools ?? [];
   if (!tools.length) {
-    return { request };
+    const hasSpecialHistory = request.messages.some((msg) => hasCompatibilitySensitiveBlocks(msg.content)) ||
+      (Array.isArray(request.system) && hasCompatibilitySensitiveBlocks(request.system));
+
+    if (!hasSpecialHistory) {
+      return { request };
+    }
+
+    return {
+      request: {
+        ...request,
+        system: normalizeSystemForCompatibility(request.system),
+        messages: request.messages.map((msg) => ({
+          ...msg,
+          content: normalizeHistoryBlocksForCompatibility(msg.content),
+        })),
+      },
+    };
   }
 
   const delimiter = new ToolCallDelimiter();
   const markers = delimiter.getMarkers();
   const toolsXml = buildToolsXml(tools);
-  
-  let template = DEFAULT_TEMPLATE
-    .replace("{tools_list}", toolsXml);
 
-  // 替换所有标记占位符
+  let template = DEFAULT_TEMPLATE.replace("{tools_list}", toolsXml);
+
+  // 替换模板中的分隔符占位符。
   for (const [key, value] of Object.entries(markers)) {
     template = template.replaceAll(`{${key}}`, String(value));
   }
 
-  // 1. 处理 System Prompt
+  // 处理 system prompt。
   let systemContent = "";
   if (request.system) {
     if (typeof request.system === "string") {
       systemContent = request.system;
     } else {
-      systemContent = request.system.map(b => b.type === "text" ? b.text : "").join("\n");
+      systemContent = request.system.map((b) => b.type === "text" ? b.text : "").join("\n");
     }
   }
   const enrichedSystem = `${template}\n\n${systemContent}`.trim();
 
-  // 2. 处理 Messages
+  // 处理消息内容中的工具与思考块。
   const enrichedMessages = request.messages.map((msg) => ({
     ...msg,
     content: normalizeBlocks(msg.content, delimiter),
   }));
 
-  // 3. 构造新请求（清空 tools，注入 system）
+  // 上游不支持原生工具时，工具定义已经体现在 system 中，因此清空 tools 字段。
   const enrichedRequest: ClaudeRequest = {
     ...request,
     system: enrichedSystem,
     messages: enrichedMessages,
-    tools: undefined, // 清空上游工具定义，因为我们要模拟
+    tools: undefined,
   };
 
   return { request: enrichedRequest, delimiter };
 }
-

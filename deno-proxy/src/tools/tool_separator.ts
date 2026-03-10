@@ -7,14 +7,7 @@
  */
 
 import type { ClaudeToolDefinition } from "../types.ts";
-
-/**
- * Web 工具类型列表（Anthropic Server Tools 格式）
- */
-const WEB_TOOL_TYPES = [
-  "web_search_20250305",
-  "web_fetch_20250910",
-] as const;
+import { isAnyWebFetchTool, isAnyWebSearchTool } from "./types.ts";
 
 /**
  * 分离后的工具
@@ -67,7 +60,10 @@ export class ToolSeparator {
    * @returns 是否为 Web 工具
    */
   static isWebTool(tool: any): boolean {
-    return "type" in tool && WEB_TOOL_TYPES.includes(tool.type as any);
+    if (!tool || typeof tool !== "object") {
+      return false;
+    }
+    return isAnyWebSearchTool(tool) || isAnyWebFetchTool(tool);
   }
 
   /**

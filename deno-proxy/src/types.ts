@@ -66,7 +66,9 @@ export interface ThinkingConfigParam {
 export interface ClaudeToolDefinition {
   name: string;
   description?: string;
-  input_schema: Record<string, unknown>;
+  input_schema?: Record<string, unknown>;
+  type?: string;
+  [key: string]: unknown;
 }
 
 export interface OpenAIImageURLBlock {

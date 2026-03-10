@@ -1,29 +1,25 @@
-import { FirecrawlClient } from "./firecrawl_client.ts";
+﻿import { FirecrawlClient } from "./firecrawl_client.ts";
 import { FormatConverter } from "./format_converter.ts";
+import { isAnyWebFetchTool, isAnyWebSearchTool } from "./types.ts";
 import type {
-  AnthropicWebSearchToolDefinition,
-  AnthropicWebFetchToolDefinition,
   AnthropicServerToolUse,
-  AnthropicWebSearchToolResult,
+  AnthropicWebFetchToolDefinition,
   AnthropicWebFetchToolResult,
-  WebToolsConfig,
+  AnthropicWebSearchToolDefinition,
+  AnthropicWebSearchToolResult,
+  FetchInterceptResult,
   FirecrawlConfig,
   SearchInterceptResult,
-  FetchInterceptResult,
   SmartSearchInterceptResult,
   UpstreamInfo,
+  WebToolsConfig,
 } from "./types.ts";
-import type {
-  ClaudeMessage,
-  ClaudeTextBlock,
-  ClaudeContentBlock,
-} from "../types.ts";
-import { log, logRequest, LogPhase } from "../logging.ts";
-import { AIClient, RequestContext, ContextBuilder } from "../ai_client/mod.ts";
+import type { ClaudeContentBlock, ClaudeMessage, ClaudeTextBlock } from "../types.ts";
+import { log, LogPhase, logRequest } from "../logging.ts";
+import { AIClient, ContextBuilder, RequestContext } from "../ai_client/mod.ts";
 
 /**
- * 工具拦截器
- * 检测并拦截 Web Search 和 Web Fetch 工具调用
+ * 宸ュ叿鎷︽埅鍣? * 妫€娴嬪苟鎷︽埅 Web Search 鍜?Web Fetch 宸ュ叿璋冪敤
  */
 export class ToolInterceptor {
   private firecrawlClient: FirecrawlClient;
@@ -37,9 +33,12 @@ export class ToolInterceptor {
     this.webToolsConfig = webToolsConfig;
   }
 
+  isSmartSearchMode(): boolean {
+    return this.webToolsConfig.searchMode === "smart";
+  }
+
   /**
-   * 检查请求是否需要拦截
-   */
+   * 妫€鏌ヨ姹傛槸鍚﹂渶瑕佹嫤鎴?   */
   static shouldIntercept(
     tools: unknown[] | undefined,
     webToolsConfig: WebToolsConfig | undefined,
@@ -49,19 +48,11 @@ export class ToolInterceptor {
     }
 
     const hasWebSearch = tools.some(
-      (tool: unknown) =>
-        typeof tool === "object" &&
-        tool !== null &&
-        "type" in tool &&
-        tool.type === "web_search_20250305",
+      (tool: unknown) => isAnyWebSearchTool(tool),
     );
 
     const hasWebFetch = tools.some(
-      (tool: unknown) =>
-        typeof tool === "object" &&
-        tool !== null &&
-        "type" in tool &&
-        tool.type === "web_fetch_20250910",
+      (tool: unknown) => isAnyWebFetchTool(tool),
     );
 
     return (
@@ -71,14 +62,13 @@ export class ToolInterceptor {
   }
 
   /**
-   * 处理 Web Search 拦截（简单模式 - 使用已提供的 query）
-   */
+   * 澶勭悊 Web Search 鎷︽埅锛堢畝鍗曟ā寮?- 浣跨敤宸叉彁渚涚殑 query锛?   */
   async handleWebSearchWithQuery(
     tool: AnthropicWebSearchToolDefinition,
     query: string,
     requestId: string,
   ): Promise<SearchInterceptResult> {
-    // 调用 Firecrawl Search API
+    // 璋冪敤 Firecrawl Search API
     const searchParams = {
       query,
       limit: this.webToolsConfig.maxSearchResults,
@@ -96,7 +86,7 @@ export class ToolInterceptor {
       creditsUsed: firecrawlResponse.credits_used,
     }, LogPhase.WEB_SEARCH);
 
-    // 过滤域名（如果有限制）
+    // Filter by allowed domains if specified
     if (tool.allowed_domains && tool.allowed_domains.length > 0) {
       firecrawlResponse.data.web = firecrawlResponse.data.web.filter((result) =>
         tool.allowed_domains!.some((domain) => result.url.includes(domain))
@@ -117,10 +107,10 @@ export class ToolInterceptor {
       }, LogPhase.WEB_SEARCH);
     }
 
-    // 生成唯一的 tool use id (使用 server_tool_use 的 srvtoolu_ 前缀)
+    // 鐢熸垚鍞竴鐨?tool use id (浣跨敤 server_tool_use 鐨?srvtoolu_ 鍓嶇紑)
     const toolUseId = `srvtoolu_${crypto.randomUUID().replace(/-/g, "").substring(0, 22)}`;
 
-    // 转换为 Anthropic 格式
+    // 杞崲涓?Anthropic 鏍煎紡
     const toolResult = FormatConverter.convertSearchResult(
       firecrawlResponse,
       toolUseId,
@@ -129,14 +119,16 @@ export class ToolInterceptor {
     logRequest(requestId, "info", `Search result converted`, {
       toolUseId,
       contentCount: toolResult.content.length,
-      sampleResult: toolResult.content[0] ? {
-        url: toolResult.content[0].url.substring(0, 50),
-        title: toolResult.content[0].title.substring(0, 50),
-        hasEncrypted: !!toolResult.content[0].encrypted_content,
-      } : null,
+      sampleResult: toolResult.content[0]
+        ? {
+          url: toolResult.content[0].url.substring(0, 50),
+          title: toolResult.content[0].title.substring(0, 50),
+          hasEncrypted: !!toolResult.content[0].encrypted_content,
+        }
+        : null,
     }, LogPhase.FORMAT);
 
-    // 构建 server_tool_use
+    // 鏋勫缓 server_tool_use
     const serverToolUse: AnthropicServerToolUse = {
       type: "server_tool_use",
       id: toolUseId,
@@ -153,7 +145,7 @@ export class ToolInterceptor {
   }
 
   /**
-   * 处理 Web Search 拦截（简单模式）
+   * 澶勭悊 Web Search 鎷︽埅锛堢畝鍗曟ā寮忥級
    */
   async handleWebSearch(
     tool: AnthropicWebSearchToolDefinition,
@@ -161,10 +153,10 @@ export class ToolInterceptor {
     upstreamInfo: UpstreamInfo,
     requestId: string,
   ): Promise<SearchInterceptResult> {
-    // 使用 AI 生成精确的搜索词
+    // 浣跨敤 AI 鐢熸垚绮剧‘鐨勬悳绱㈣瘝
     const query = await this.extractSearchQuery(messages, upstreamInfo, requestId);
 
-    // 调用 Firecrawl Search API
+    // 璋冪敤 Firecrawl Search API
     const searchParams = {
       query,
       limit: this.webToolsConfig.maxSearchResults,
@@ -176,19 +168,19 @@ export class ToolInterceptor {
 
     const firecrawlResponse = await this.firecrawlClient.search(searchParams);
 
-    log("info", `🔎 Firecrawl search completed`, {
+    log("info", `馃攷 Firecrawl search completed`, {
       requestId,
       query,
       resultsCount: firecrawlResponse.data.web.length,
       creditsUsed: firecrawlResponse.credits_used,
     });
 
-    // 过滤域名（如果有限制）
+    // Filter by allowed domains if specified
     if (tool.allowed_domains && tool.allowed_domains.length > 0) {
       firecrawlResponse.data.web = firecrawlResponse.data.web.filter((result) =>
         tool.allowed_domains!.some((domain) => result.url.includes(domain))
       );
-      log("info", `🔍 Filtered by allowed_domains`, {
+      log("info", `馃攳 Filtered by allowed_domains`, {
         requestId,
         remainingCount: firecrawlResponse.data.web.length,
         allowedDomains: tool.allowed_domains,
@@ -199,34 +191,36 @@ export class ToolInterceptor {
       firecrawlResponse.data.web = firecrawlResponse.data.web.filter((result) =>
         !tool.blocked_domains!.some((domain) => result.url.includes(domain))
       );
-      log("info", `🚫 Filtered by blocked_domains`, {
+      log("info", `馃毇 Filtered by blocked_domains`, {
         requestId,
         remainingCount: firecrawlResponse.data.web.length,
         blockedDomains: tool.blocked_domains,
       });
     }
 
-    // 生成唯一的 tool use id (使用 server_tool_use 的 srvtoolu_ 前缀)
+    // 鐢熸垚鍞竴鐨?tool use id (浣跨敤 server_tool_use 鐨?srvtoolu_ 鍓嶇紑)
     const toolUseId = `srvtoolu_${crypto.randomUUID().replace(/-/g, "").substring(0, 22)}`;
 
-    // 转换为 Anthropic 格式
+    // 杞崲涓?Anthropic 鏍煎紡
     const toolResult = FormatConverter.convertSearchResult(
       firecrawlResponse,
       toolUseId,
     );
 
-    log("info", `📦 Search result converted to Anthropic format`, {
+    log("info", `馃摝 Search result converted to Anthropic format`, {
       requestId,
       toolUseId,
       contentCount: toolResult.content.length,
-      sampleResult: toolResult.content[0] ? {
-        url: toolResult.content[0].url.substring(0, 50),
-        title: toolResult.content[0].title.substring(0, 50),
-        hasEncrypted: !!toolResult.content[0].encrypted_content,
-      } : null,
+      sampleResult: toolResult.content[0]
+        ? {
+          url: toolResult.content[0].url.substring(0, 50),
+          title: toolResult.content[0].title.substring(0, 50),
+          hasEncrypted: !!toolResult.content[0].encrypted_content,
+        }
+        : null,
     });
 
-    // 构建 server_tool_use
+    // 鏋勫缓 server_tool_use
     const serverToolUse: AnthropicServerToolUse = {
       type: "server_tool_use",
       id: toolUseId,
@@ -243,13 +237,11 @@ export class ToolInterceptor {
   }
 
   /**
-   * 处理 Web Search 拦截（智能模式 - 流式版本）
-   * 接收已有的搜索结果，流式调用上游 LLM 进行分析
-   * 如果启用深入浏览，会进一步抓取推荐页面并进行最终总结
+   * 澶勭悊 Web Search 鎷︽埅锛堟櫤鑳芥ā寮?- 娴佸紡鐗堟湰锛?   * 鎺ユ敹宸叉湁鐨勬悳绱㈢粨鏋滐紝娴佸紡璋冪敤涓婃父 LLM 杩涜鍒嗘瀽
+   * 濡傛灉鍚敤娣卞叆娴忚锛屼細杩涗竴姝ユ姄鍙栨帹鑽愰〉闈㈠苟杩涜鏈€缁堟€荤粨
    *
-   * @param searchResult - 已获取的搜索结果
-   * @param onStreamChunk - 接收文本增量的回调函数
-   */
+   * @param searchResult - 宸茶幏鍙栫殑鎼滅储缁撴灉
+   * @param onStreamChunk - 鎺ユ敹鏂囨湰澧為噺鐨勫洖璋冨嚱鏁?   */
   async doStreamAnalysis(
     tool: AnthropicWebSearchToolDefinition,
     searchResult: SearchInterceptResult,
@@ -259,14 +251,14 @@ export class ToolInterceptor {
     onStreamChunk: (text: string) => Promise<void>,
     keepAliveCallback?: () => void,
   ): Promise<void> {
-    // 构建搜索结果的文本摘要
+    // 鏋勫缓鎼滅储缁撴灉鐨勬枃鏈憳瑕
     const searchSummary = this.buildSearchSummary(searchResult.toolResult);
 
-    // 判断是否启用深入浏览
+    // 鍒ゆ柇鏄惁鍚敤娣卞叆娴忚
     const deepBrowseEnabled = this.webToolsConfig.deepBrowseEnabled;
     const deepBrowseCount = this.webToolsConfig.deepBrowseCount;
 
-    log("info", `🤖 Starting streaming analysis`, {
+    log("info", `馃 Starting streaming analysis`, {
       requestId,
       deepBrowseEnabled,
       deepBrowseCount,
@@ -278,7 +270,7 @@ export class ToolInterceptor {
     });
 
     if (!deepBrowseEnabled) {
-      // 普通模式：直接流式输出分析
+      // 鏅€氭ā寮忥細鐩存帴娴佸紡杈撳嚭鍒嗘瀽
       await this.streamUpstreamAnalysis(
         messages,
         searchResult.serverToolUse.input.query!,
@@ -288,7 +280,7 @@ export class ToolInterceptor {
         onStreamChunk,
       );
     } else {
-      // 深入浏览模式：先获取链接列表，再抓取，最后流式输出最终分析
+      // 娣卞叆娴忚妯″紡锛氬厛鑾峰彇閾炬帴鍒楄〃锛屽啀鎶撳彇锛屾渶鍚庢祦寮忚緭鍑烘渶缁堝垎鏋
       const linksList = await this.getDeepBrowseLinks(
         messages,
         searchResult.serverToolUse.input.query!,
@@ -299,7 +291,7 @@ export class ToolInterceptor {
       );
 
       if (linksList.length === 0) {
-        // 如果没有推荐链接，直接流式输出普通分析
+        // 濡傛灉娌℃湁鎺ㄨ崘閾炬帴锛岀洿鎺ユ祦寮忚緭鍑烘櫘閫氬垎鏋
         await this.streamUpstreamAnalysis(
           messages,
           searchResult.serverToolUse.input.query!,
@@ -311,41 +303,45 @@ export class ToolInterceptor {
         return;
       }
 
-      // 限制浏览数量 - 强制使用 Math.min 确保不超过配置值
+      // 闄愬埗娴忚鏁伴噺 - 寮哄埗浣跨敤 Math.min 纭繚涓嶈秴杩囬厤缃€
       const linksToFetch = linksList.slice(0, Math.min(linksList.length, deepBrowseCount));
 
-      log("info", `🔗 Fetching deep browse pages`, {
+      log("info", `馃敆 Fetching deep browse pages`, {
         requestId,
         originalLinksCount: linksList.length,
         requestedCount: deepBrowseCount,
         actualFetchCount: linksToFetch.length,
-        links: linksToFetch.map(l => l.substring(0, 100)),
+        links: linksToFetch.map((l) => l.substring(0, 100)),
       });
 
-      // 并发抓取推荐的页面
-      const browseResults = await this.fetchMultiplePages(linksToFetch, requestId, keepAliveCallback);
+      // 骞跺彂鎶撳彇鎺ㄨ崘鐨勯〉闈
+      const browseResults = await this.fetchMultiplePages(
+        linksToFetch,
+        requestId,
+        keepAliveCallback,
+      );
 
-      log("info", `📚 Browse results obtained`, {
+      log("info", `馃摎 Browse results obtained`, {
         requestId,
         resultsCount: browseResults.length,
-        contentLengths: browseResults.map(r => r.content.length),
+        contentLengths: browseResults.map((r) => r.content.length),
       });
 
-      // 构建最终分析提示词
+      // 鏋勫缓鏈€缁堝垎鏋愭彁绀鸿瘝
       const finalPrompt = this.buildFinalAnalysisPrompt(
         searchResult.serverToolUse.input.query!,
         searchSummary,
-        "",  // 不需要初步分析
+        "", // 涓嶉渶瑕佸垵姝ュ垎鏋
         browseResults,
       );
 
-      log("info", `📝 Final analysis prompt built`, {
+      log("info", `馃摑 Final analysis prompt built`, {
         requestId,
         promptLength: finalPrompt.length,
         promptPreview: finalPrompt.substring(0, 200),
       });
 
-      // 流式输出最终分析
+      // 娴佸紡杈撳嚭鏈€缁堝垎鏋
       await this.streamFinalAnalysis(
         messages,
         finalPrompt,
@@ -357,9 +353,9 @@ export class ToolInterceptor {
   }
 
   /**
-   * 处理 Web Search 拦截（智能模式）
-   * 先调用 Firecrawl 获取搜索结果，再调用上游 LLM 进行分析
-   * 如果启用深入浏览，会进一步抓取推荐页面并进行最终总结
+   * 澶勭悊 Web Search 鎷︽埅锛堟櫤鑳芥ā寮忥級
+   * 鍏堣皟鐢?Firecrawl 鑾峰彇鎼滅储缁撴灉锛屽啀璋冪敤涓婃父 LLM 杩涜鍒嗘瀽
+   * 濡傛灉鍚敤娣卞叆娴忚锛屼細杩涗竴姝ユ姄鍙栨帹鑽愰〉闈㈠苟杩涜鏈€缁堟€荤粨
    */
   async handleSmartWebSearch(
     tool: AnthropicWebSearchToolDefinition,
@@ -368,17 +364,53 @@ export class ToolInterceptor {
     requestId: string,
     keepAliveCallback?: () => void,
   ): Promise<SmartSearchInterceptResult> {
-    // 1. 先获取搜索结果（使用简单模式的逻辑，已包含 AI 生成搜索词）
+    // 1. 鍏堣幏鍙栨悳绱㈢粨鏋滐紙浣跨敤绠€鍗曟ā寮忕殑閫昏緫锛屽凡鍖呭惈 AI 鐢熸垚鎼滅储璇嶏級
     const simpleResult = await this.handleWebSearch(tool, messages, upstreamInfo, requestId);
 
-    // 2. 构建搜索结果的文本摘要
+    return await this.handleSmartWebSearchFromSimpleResult(
+      simpleResult,
+      messages,
+      upstreamInfo,
+      requestId,
+      keepAliveCallback,
+    );
+  }
+
+  async handleSmartWebSearchWithQuery(
+    tool: AnthropicWebSearchToolDefinition,
+    query: string,
+    messages: ClaudeMessage[],
+    upstreamInfo: UpstreamInfo,
+    requestId: string,
+    keepAliveCallback?: () => void,
+  ): Promise<SmartSearchInterceptResult> {
+    const simpleResult = await this.handleWebSearchWithQuery(tool, query, requestId);
+
+    return await this.handleSmartWebSearchFromSimpleResult(
+      simpleResult,
+      messages,
+      upstreamInfo,
+      requestId,
+      keepAliveCallback,
+    );
+  }
+
+  private async handleSmartWebSearchFromSimpleResult(
+    simpleResult: SearchInterceptResult,
+    messages: ClaudeMessage[],
+    upstreamInfo: UpstreamInfo,
+    requestId: string,
+    keepAliveCallback?: () => void,
+  ): Promise<SmartSearchInterceptResult> {
+
+    // 2. 鏋勫缓鎼滅储缁撴灉鐨勬枃鏈憳瑕
     const searchSummary = this.buildSearchSummary(simpleResult.toolResult);
 
-    // 3. 调用上游 LLM 进行初步分析
+    // 3. 璋冪敤涓婃父 LLM 杩涜鍒濇鍒嗘瀽
     const deepBrowseEnabled = this.webToolsConfig.deepBrowseEnabled;
     const deepBrowseCount = this.webToolsConfig.deepBrowseCount;
 
-    log("info", `🤖 Starting initial analysis`, {
+    log("info", `馃 Starting initial analysis`, {
       requestId,
       deepBrowseEnabled,
       deepBrowseCount,
@@ -394,11 +426,11 @@ export class ToolInterceptor {
       deepBrowseCount,
     );
 
-    // 4. 如果未启用深入浏览，直接返回初步分析（移除标记）
+    // 4. 濡傛灉鏈惎鐢ㄦ繁鍏ユ祻瑙堬紝鐩存帴杩斿洖鍒濇鍒嗘瀽锛堢Щ闄ゆ爣璁帮級
     if (!deepBrowseEnabled) {
       const cleanedText = this.removeDeepBrowseMarkers(initialAnalysisText);
 
-      log("info", `✅ Returning simple analysis (deep browse disabled)`, {
+      log("info", `鉁?Returning simple analysis (deep browse disabled)`, {
         requestId,
         analysisLength: cleanedText.length,
       });
@@ -413,20 +445,20 @@ export class ToolInterceptor {
       };
     }
 
-    // 5. 提取 AI 推荐的深入浏览链接
+    // 5. 鎻愬彇 AI 鎺ㄨ崘鐨勬繁鍏ユ祻瑙堥摼鎺
     const deepBrowseLinks = this.extractDeepBrowseLinks(initialAnalysisText);
 
-    log("info", `🔗 Extracted deep browse links`, {
+    log("info", `馃敆 Extracted deep browse links`, {
       requestId,
       linksCount: deepBrowseLinks.length,
-      links: deepBrowseLinks.map(l => l.substring(0, 100)),
+      links: deepBrowseLinks.map((l) => l.substring(0, 100)),
     });
 
-    // 如果没有推荐链接，返回初步分析（移除标记）
+    // If no recommended links, return initial analysis (remove markers)
     if (deepBrowseLinks.length === 0) {
       const cleanedText = this.removeDeepBrowseMarkers(initialAnalysisText);
 
-      log("info", `✅ No links to browse, returning initial analysis`, {
+      log("info", `鉁?No links to browse, returning initial analysis`, {
         requestId,
       });
 
@@ -440,23 +472,26 @@ export class ToolInterceptor {
       };
     }
 
-    // 6. 限制浏览数量 - 强制使用 Math.min 确保不超过配置值
-    const linksToFetch = deepBrowseLinks.slice(0, Math.min(deepBrowseLinks.length, deepBrowseCount));
+    // 6. 闄愬埗娴忚鏁伴噺 - 寮哄埗浣跨敤 Math.min 纭繚涓嶈秴杩囬厤缃€
+    const linksToFetch = deepBrowseLinks.slice(
+      0,
+      Math.min(deepBrowseLinks.length, deepBrowseCount),
+    );
 
-    log("info", `🔗 Deep browse links after limiting`, {
+    log("info", `馃敆 Deep browse links after limiting`, {
       requestId,
       originalCount: deepBrowseLinks.length,
       requestedCount: deepBrowseCount,
       actualCount: linksToFetch.length,
     });
 
-    // 7. 并发抓取推荐的页面（传入 keepAlive 回调）
+    // 7. 骞跺彂鎶撳彇鎺ㄨ崘鐨勯〉闈紙浼犲叆 keepAlive 鍥炶皟锛
     const browseResults = await this.fetchMultiplePages(linksToFetch, requestId, keepAliveCallback);
 
-    // 8. 移除标记后的初步分析
+    // 8. 绉婚櫎鏍囪鍚庣殑鍒濇鍒嗘瀽
     const cleanedInitialAnalysis = this.removeDeepBrowseMarkers(initialAnalysisText);
 
-    // 9. 构建最终分析提示词
+    // 9. 鏋勫缓鏈€缁堝垎鏋愭彁绀鸿瘝
     const finalPrompt = this.buildFinalAnalysisPrompt(
       simpleResult.serverToolUse.input.query!,
       searchSummary,
@@ -464,8 +499,8 @@ export class ToolInterceptor {
       browseResults,
     );
 
-    // 10. 调用上游 LLM 进行最终总结
-    log("info", `🧠 Calling upstream for final analysis`, {
+    // 10. 璋冪敤涓婃父 LLM 杩涜鏈€缁堟€荤粨
+    log("info", `馃 Calling upstream for final analysis`, {
       requestId,
       browseResultsCount: browseResults.length,
     });
@@ -477,12 +512,12 @@ export class ToolInterceptor {
       requestId,
     );
 
-    log("info", `✅ Final analysis completed`, {
+    log("info", `鉁?Final analysis completed`, {
       requestId,
       analysisLength: finalAnalysisText.length,
     });
 
-    // 11. 返回智能模式结果：LLM 最终分析 + 搜索结果
+    // 11. 杩斿洖鏅鸿兘妯″紡缁撴灉锛歀LM 鏈€缁堝垎鏋?+ 鎼滅储缁撴灉
     return {
       serverToolUse: simpleResult.serverToolUse,
       llmAnalysis: {
@@ -494,19 +529,19 @@ export class ToolInterceptor {
   }
 
   /**
-   * 处理 Web Fetch 拦截（简单模式）
+   * 澶勭悊 Web Fetch 鎷︽埅锛堢畝鍗曟ā寮忥級
    */
   async handleWebFetch(
     tool: AnthropicWebFetchToolDefinition,
     url: string,
     requestId: string,
   ): Promise<FetchInterceptResult> {
-    log("info", "📥 Starting Firecrawl scrape", {
+    log("info", "馃摜 Starting Firecrawl scrape", {
       requestId,
       url: url.substring(0, 100),
     });
 
-    // 调用 Firecrawl Scrape API
+    // 璋冪敤 Firecrawl Scrape API
     const scrapeParams = {
       url,
       formats: ["markdown"],
@@ -514,24 +549,24 @@ export class ToolInterceptor {
 
     const firecrawlResponse = await this.firecrawlClient.scrape(scrapeParams);
 
-    log("info", "✅ Firecrawl scrape completed", {
+    log("info", "鉁?Firecrawl scrape completed", {
       requestId,
       url: url.substring(0, 100),
       contentLength: firecrawlResponse.data.markdown?.length || 0,
       creditsUsed: firecrawlResponse.credits_used,
     });
 
-    // 生成唯一的 tool use id (使用 server_tool_use 的 srvtoolu_ 前缀)
+    // 鐢熸垚鍞竴鐨?tool use id (浣跨敤 server_tool_use 鐨?srvtoolu_ 鍓嶇紑)
     const toolUseId = `srvtoolu_${crypto.randomUUID().replace(/-/g, "").substring(0, 22)}`;
 
-    // 转换为 Anthropic 格式
+    // 杞崲涓?Anthropic 鏍煎紡
     const toolResult = FormatConverter.convertScrapeResult(
       firecrawlResponse,
       toolUseId,
       url,
     );
 
-    // 构建 server_tool_use
+    // 鏋勫缓 server_tool_use
     const serverToolUse: AnthropicServerToolUse = {
       type: "server_tool_use",
       id: toolUseId,
@@ -548,7 +583,7 @@ export class ToolInterceptor {
   }
 
   /**
-   * 从 UpstreamInfo 创建临时 RequestContext 用于辅助 AI 请求
+   * 浠?UpstreamInfo 鍒涘缓涓存椂 RequestContext 鐢ㄤ簬杈呭姪 AI 璇锋眰
    */
   private createContextFromUpstreamInfo(
     upstreamInfo: UpstreamInfo,
@@ -558,15 +593,15 @@ export class ToolInterceptor {
   }
 
   /**
-   * 从消息中提取搜索查询
-   * 使用上游 AI 生成精确的搜索词
+   * 浠庢秷鎭腑鎻愬彇鎼滅储鏌ヨ
+   * 浣跨敤涓婃父 AI 鐢熸垚绮剧‘鐨勬悳绱㈣瘝
    */
   private async extractSearchQuery(
     messages: ClaudeMessage[],
     upstreamInfo: UpstreamInfo,
     requestId: string,
   ): Promise<string> {
-    // 获取最后一条用户消息
+    // 鑾峰彇鏈€鍚庝竴鏉＄敤鎴锋秷鎭
     const lastUserMessage = [...messages]
       .reverse()
       .find((msg) => msg.role === "user");
@@ -575,7 +610,7 @@ export class ToolInterceptor {
       return "";
     }
 
-    // 提取文本内容
+    // 鎻愬彇鏂囨湰鍐呭
     let userQuestion = "";
     if (typeof lastUserMessage.content === "string") {
       userQuestion = lastUserMessage.content;
@@ -592,20 +627,21 @@ export class ToolInterceptor {
       return "";
     }
 
-    log("info", "🤖 Generating search query with AI", {
+    log("info", "馃 Generating search query with AI", {
       requestId,
       userQuestion: userQuestion.substring(0, 100) + (userQuestion.length > 100 ? "..." : ""),
       model: upstreamInfo.model,
     });
 
-    // 使用上游 AI 生成搜索词
-    const queryPrompt = `Based on the following user question, generate a concise and precise search query (maximum 200 characters) that would be effective for a web search engine. Return ONLY the search query, without any explanations or additional text.
+    // 浣跨敤涓婃父 AI 鐢熸垚鎼滅储璇
+    const queryPrompt =
+      `Based on the following user question, generate a concise and precise search query (maximum 200 characters) that would be effective for a web search engine. Return ONLY the search query, without any explanations or additional text.
 
 User question: ${userQuestion}
 
 Search query:`;
 
-    // 构建请求消息
+    // 鏋勫缓璇锋眰娑堟伅
     const queryMessages: ClaudeMessage[] = [
       {
         role: "user",
@@ -613,7 +649,7 @@ Search query:`;
       },
     ];
 
-    // 使用 AIClient 发送请求
+    // 浣跨敤 AIClient 鍙戦€佽姹
     try {
       const context = this.createContextFromUpstreamInfo(upstreamInfo, requestId);
       const client = new AIClient(context);
@@ -623,15 +659,15 @@ Search query:`;
         temperature: 0.3,
       });
 
-      // 提取生成的搜索词
+      // 鎻愬彇鐢熸垚鐨勬悳绱㈣瘝
       let generatedQuery = typeof response.content === "string" ? response.content.trim() : "";
 
-      // 限制长度为 200 字符
+      // 闄愬埗闀垮害涓?200 瀛楃
       if (generatedQuery.length > 200) {
         generatedQuery = generatedQuery.substring(0, 200);
       }
 
-      log("info", "✅ Search query generated", {
+      log("info", "鉁?Search query generated", {
         requestId,
         generatedQuery,
         queryLength: generatedQuery.length,
@@ -648,10 +684,10 @@ Search query:`;
   }
 
   /**
-   * 后备方案：简单的关键词提取（当 AI 调用失败时使用）
+   * 鍚庡鏂规锛氱畝鍗曠殑鍏抽敭璇嶆彁鍙栵紙褰?AI 璋冪敤澶辫触鏃朵娇鐢級
    */
   private fallbackExtractQuery(text: string): string {
-    // 简单的关键词提取：移除常见的停用词
+    // 绠€鍗曠殑鍏抽敭璇嶆彁鍙栵細绉婚櫎甯歌鐨勫仠鐢ㄨ瘝
     const stopWords = [
       "what",
       "is",
@@ -675,7 +711,7 @@ Search query:`;
     const words = text.toLowerCase().split(/\s+/);
     const keywords = words.filter((word) => !stopWords.includes(word));
 
-    // 限制长度为 200 字符
+    // 闄愬埗闀垮害涓?200 瀛楃
     let query = keywords.join(" ");
     if (query.length > 200) {
       query = query.substring(0, 200);
@@ -685,8 +721,7 @@ Search query:`;
   }
 
   /**
-   * 构建搜索结果摘要（用于 LLM 分析）
-   */
+   * 鏋勫缓鎼滅储缁撴灉鎽樿锛堢敤浜?LLM 鍒嗘瀽锛?   */
   private buildSearchSummary(toolResult: AnthropicWebSearchToolResult): string {
     const results = toolResult.content;
     if (results.length === 0) {
@@ -697,7 +732,7 @@ Search query:`;
     results.forEach((result, index) => {
       summary += `${index + 1}. ${result.title}\n`;
       summary += `   URL: ${result.url}\n`;
-      // 解码 encrypted_content 获取预览（如果可能）
+      // 瑙ｇ爜 encrypted_content 鑾峰彇棰勮锛堝鏋滃彲鑳斤級
       try {
         const decoded = atob(result.encrypted_content);
         const data = JSON.parse(decoded);
@@ -705,7 +740,7 @@ Search query:`;
           summary += `   Preview: ${data.preview}\n`;
         }
       } catch {
-        // 忽略解码错误
+        // 蹇界暐瑙ｇ爜閿欒
       }
       summary += `\n`;
     });
@@ -714,7 +749,7 @@ Search query:`;
   }
 
   /**
-   * 调用上游 API 进行初步分析（可能包含深入浏览链接标记）
+   * 璋冪敤涓婃父 API 杩涜鍒濇鍒嗘瀽锛堝彲鑳藉寘鍚繁鍏ユ祻瑙堥摼鎺ユ爣璁帮級
    */
   private async callUpstreamForInitialAnalysis(
     originalMessages: ClaudeMessage[],
@@ -725,7 +760,7 @@ Search query:`;
     deepBrowseEnabled: boolean,
     deepBrowseCount: number,
   ): Promise<string> {
-    log("info", `🧠 Calling upstream for initial search analysis`, {
+    log("info", `馃 Calling upstream for initial search analysis`, {
       requestId,
       query: query.substring(0, 100),
       model: upstreamInfo.model,
@@ -733,12 +768,13 @@ Search query:`;
       deepBrowseEnabled,
     });
 
-    // 构建分析提示词
+    // 鏋勫缓鍒嗘瀽鎻愮ず璇
     let analysisPrompt: string;
 
     if (deepBrowseEnabled) {
-      // 深入浏览模式：只输出有价值的链接列表
-      analysisPrompt = `Based on the following search results for the query "${query}", please select ${deepBrowseCount} most valuable pages that would provide detailed and authoritative information.
+      // 娣卞叆娴忚妯″紡锛氬彧杈撳嚭鏈変环鍊肩殑閾炬帴鍒楄〃
+      analysisPrompt =
+        `Based on the following search results for the query "${query}", please select ${deepBrowseCount} most valuable pages that would provide detailed and authoritative information.
 
 ${contentSummary}
 
@@ -753,18 +789,18 @@ https://example.com/page3
 The URLs must be from the search results above.
 IMPORTANT: Do NOT call web_search again. The search has already been performed above.`;
     } else {
-      // 普通模式：正常总结
-      analysisPrompt = `Based on the following search results for the query "${query}", please provide a comprehensive analysis and answer:\n\n${contentSummary}\n\nProvide a detailed, well-structured response that synthesizes the information from these search results.
+      // 鏅€氭ā寮忥細姝ｅ父鎬荤粨
+      analysisPrompt =
+        `Based on the following search results for the query "${query}", please provide a comprehensive analysis and answer:\n\n${contentSummary}\n\nProvide a detailed, well-structured response that synthesizes the information from these search results.
 IMPORTANT: Do NOT call web_search again. The search has already been performed above.`;
     }
 
-    // 提取用户原始问题
-    const userQuestion = this.extractUserQuestion(originalMessages);
+    // 鎻愬彇鐢ㄦ埛鍘熷闂
 
-    // 构建清理后的消息列表（移除工具定义）
-    const cleanMessages = this.buildCleanMessages(originalMessages, userQuestion, analysisPrompt);
+    // 鏋勫缓娓呯悊鍚庣殑娑堟伅鍒楄〃锛堢Щ闄ゅ伐鍏峰畾涔夛級
+    const cleanMessages = this.buildCleanMessages(originalMessages, analysisPrompt);
 
-    // 使用 AIClient 发送请求
+    // 浣跨敤 AIClient 鍙戦€佽姹
     const context = this.createContextFromUpstreamInfo(upstreamInfo, requestId);
     const client = new AIClient(context);
 
@@ -772,9 +808,11 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
       max_tokens: 4096,
     });
 
-    const analysisText = typeof response.content === "string" ? response.content : "No analysis generated.";
+    const analysisText = typeof response.content === "string"
+      ? response.content
+      : "No analysis generated.";
 
-    log("info", `✅ Initial analysis completed`, {
+    log("info", `鉁?Initial analysis completed`, {
       requestId,
       analysisLength: analysisText.length,
       hasContent: analysisText !== "No analysis generated.",
@@ -784,21 +822,19 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
   }
 
   /**
-   * 调用上游 API 进行最终分析（基于深入浏览结果）
-   */
+   * 璋冪敤涓婃父 API 杩涜鏈€缁堝垎鏋愶紙鍩轰簬娣卞叆娴忚缁撴灉锛?   */
   private async callUpstreamForFinalAnalysis(
     originalMessages: ClaudeMessage[],
     finalPrompt: string,
     upstreamInfo: UpstreamInfo,
     requestId: string,
   ): Promise<string> {
-    // 提取用户原始问题
-    const userQuestion = this.extractUserQuestion(originalMessages);
+    // 鎻愬彇鐢ㄦ埛鍘熷闂
 
-    // 构建清理后的消息列表（移除工具定义）
-    const cleanMessages = this.buildCleanMessages(originalMessages, userQuestion, finalPrompt);
+    // 鏋勫缓娓呯悊鍚庣殑娑堟伅鍒楄〃锛堢Щ闄ゅ伐鍏峰畾涔夛級
+    const cleanMessages = this.buildCleanMessages(originalMessages, finalPrompt);
 
-    // 使用 AIClient 发送请求
+    // 浣跨敤 AIClient 鍙戦€佽姹
     const context = this.createContextFromUpstreamInfo(upstreamInfo, requestId);
     const client = new AIClient(context);
 
@@ -810,8 +846,7 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
   }
 
   /**
-   * 从 AI 分析文本中提取深入浏览链接
-   */
+   * 浠?AI 鍒嗘瀽鏂囨湰涓彁鍙栨繁鍏ユ祻瑙堥摼鎺?   */
   private extractDeepBrowseLinks(analysisText: string): string[] {
     const regex = /\[DEEP_BROWSE_LINKS\]([\s\S]*?)\[\/DEEP_BROWSE_LINKS\]/;
     const match = analysisText.match(regex);
@@ -828,31 +863,31 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
   }
 
   /**
-   * 移除文本中的深入浏览链接标记
+   * 绉婚櫎鏂囨湰涓殑娣卞叆娴忚閾炬帴鏍囪
    */
   private removeDeepBrowseMarkers(analysisText: string): string {
-    return analysisText.replace(/\[DEEP_BROWSE_LINKS\][\s\S]*?\[\/DEEP_BROWSE_LINKS\]/g, '').trim();
+    return analysisText.replace(/\[DEEP_BROWSE_LINKS\][\s\S]*?\[\/DEEP_BROWSE_LINKS\]/g, "").trim();
   }
 
   /**
-   * 并发抓取多个页面
+   * 骞跺彂鎶撳彇澶氫釜椤甸潰
    */
   private async fetchMultiplePages(
     urls: string[],
     requestId: string,
     keepAliveCallback?: () => void,
   ): Promise<Array<{ url: string; content: string; title?: string }>> {
-    log("info", `🌐 Starting deep browse for ${urls.length} pages`, {
+    log("info", `馃寪 Starting deep browse for ${urls.length} pages`, {
       requestId,
-      urls: urls.map(u => u.substring(0, 100)),
+      urls: urls.map((u) => u.substring(0, 100)),
     });
 
-    // 设置心跳定时器
+    // 璁剧疆蹇冭烦瀹氭椂鍣
     let keepAliveInterval: number | undefined;
     if (keepAliveCallback) {
       keepAliveInterval = setInterval(() => {
         keepAliveCallback();
-      }, 5000); // 每 5 秒发送心跳
+      }, 5000); // 姣?5 绉掑彂閫佸績璺
     }
 
     try {
@@ -865,7 +900,7 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
 
           const response = await this.firecrawlClient.scrape(scrapeParams);
 
-          log("info", `✅ Page scraped successfully`, {
+          log("info", `鉁?Page scraped successfully`, {
             requestId,
             url: url.substring(0, 100),
             contentLength: response.data.markdown?.length || 0,
@@ -877,7 +912,7 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
             title: response.data.metadata?.title,
           };
         } catch (error) {
-          log("warn", `❌ Failed to scrape page`, {
+          log("warn", `鉂?Failed to scrape page`, {
             requestId,
             url: url.substring(0, 100),
             error: String(error),
@@ -892,15 +927,15 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
 
       const results = await Promise.all(scrapePromises);
 
-      log("info", `✅ Deep browse completed`, {
+      log("info", `鉁?Deep browse completed`, {
         requestId,
         totalPages: results.length,
-        successfulPages: results.filter(r => !r.content.startsWith("[Failed")).length,
+        successfulPages: results.filter((r) => !r.content.startsWith("[Failed")).length,
       });
 
       return results;
     } finally {
-      // 清除心跳定时器
+      // 娓呴櫎蹇冭烦瀹氭椂鍣
       if (keepAliveInterval !== undefined) {
         clearInterval(keepAliveInterval);
       }
@@ -908,7 +943,7 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
   }
 
   /**
-   * 构建深入浏览后的最终分析提示词
+   * 鏋勫缓娣卞叆娴忚鍚庣殑鏈€缁堝垎鏋愭彁绀鸿瘝
    */
   private buildFinalAnalysisPrompt(
     query: string,
@@ -916,7 +951,8 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
     initialAnalysis: string,
     browseResults: Array<{ url: string; content: string; title?: string }>,
   ): string {
-    let prompt = `Based on the search query "${query}", I have gathered the following information:\n\n`;
+    let prompt =
+      `Based on the search query "${query}", I have gathered the following information:\n\n`;
 
     prompt += `## Search Results Summary\n${searchSummary}\n\n`;
 
@@ -927,25 +963,25 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
     prompt += `## Deep Browse Results\n`;
     prompt += `I have browsed the following ${browseResults.length} pages in detail:\n\n`;
 
-    // 使用配置的限制
+    // 浣跨敤閰嶇疆鐨勯檺鍒
     const contentLimit = this.webToolsConfig.deepBrowsePageContentLimit || 5000;
 
     browseResults.forEach((result, index) => {
       prompt += `### Page ${index + 1}: ${result.title || result.url}\n`;
       prompt += `URL: ${result.url}\n`;
-      // 使用配置的字符数限制
+      // 浣跨敤閰嶇疆鐨勫瓧绗︽暟闄愬埗
       const content = result.content.substring(0, contentLimit);
       prompt += `Content:\n${content}\n\n`;
     });
 
-    prompt += `\nPlease provide a comprehensive, well-structured final answer that synthesizes all the information above. Focus on directly answering the user's question with accurate details from the browsed pages.`;
+    prompt +=
+      `\nPlease provide a comprehensive, well-structured final answer that synthesizes all the information above. Focus on directly answering the user's question with accurate details from the browsed pages.`;
 
     return prompt;
   }
 
   /**
-   * 获取深入浏览链接（非流式，仅获取链接列表）
-   */
+   * 鑾峰彇娣卞叆娴忚閾炬帴锛堥潪娴佸紡锛屼粎鑾峰彇閾炬帴鍒楄〃锛?   */
   private async getDeepBrowseLinks(
     messages: ClaudeMessage[],
     query: string,
@@ -954,7 +990,8 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
     requestId: string,
     count: number,
   ): Promise<string[]> {
-    const prompt = `Based on the following search results for the query "${query}", you MUST select EXACTLY ${count} URLs that would provide the most detailed and authoritative information.
+    const prompt =
+      `Based on the following search results for the query "${query}", you MUST select EXACTLY ${count} URLs that would provide the most detailed and authoritative information.
 
 ${searchSummary}
 
@@ -971,13 +1008,12 @@ https://example.com/page2
 https://example.com/page3
 [/DEEP_BROWSE_LINKS]`;
 
-    // 提取用户原始问题
-    const userQuestion = this.extractUserQuestion(messages);
+    // 鎻愬彇鐢ㄦ埛鍘熷闂
 
-    // 构建清理后的消息列表（移除工具定义）
-    const cleanMessages = this.buildCleanMessages(messages, userQuestion, prompt);
+    // 鏋勫缓娓呯悊鍚庣殑娑堟伅鍒楄〃锛堢Щ闄ゅ伐鍏峰畾涔夛級
+    const cleanMessages = this.buildCleanMessages(messages, prompt);
 
-    // 使用 AIClient 发送请求
+    // 浣跨敤 AIClient 鍙戦€佽姹
     try {
       const context = this.createContextFromUpstreamInfo(upstreamInfo, requestId);
       const client = new AIClient(context);
@@ -989,21 +1025,21 @@ https://example.com/page3
 
       const responseText = typeof response.content === "string" ? response.content : "";
 
-      log("info", `🤖 AI response for deep browse links`, {
+      log("info", `馃 AI response for deep browse links`, {
         requestId,
         requestedCount: count,
         responseLength: responseText.length,
         responsePreview: responseText.substring(0, 500),
       });
 
-      // 提取链接
+      // 鎻愬彇閾炬帴
       const links = this.extractDeepBrowseLinks(responseText);
 
-      log("info", `🔗 Got deep browse links`, {
+      log("info", `馃敆 Got deep browse links`, {
         requestId,
         requestedCount: count,
         extractedCount: links.length,
-        links: links.map(l => l.substring(0, 100)),
+        links: links.map((l) => l.substring(0, 100)),
       });
 
       return links;
@@ -1017,77 +1053,64 @@ https://example.com/page3
   }
 
   /**
-   * 从消息中提取用户原始问题（移除工具定义和 tool_use 消息）
-   * 用于内部 AI 请求，避免 AI 再次调用工具
-   */
-  private extractUserQuestion(messages: ClaudeMessage[]): string {
-    // 找到最后一条用户消息
-    const lastUserMessage = [...messages]
-      .reverse()
-      .find((msg) => msg.role === "user");
-
-    if (!lastUserMessage) {
-      return "";
-    }
-
-    // 提取文本内容
-    if (typeof lastUserMessage.content === "string") {
-      return lastUserMessage.content;
-    } else if (Array.isArray(lastUserMessage.content)) {
-      const textBlocks = lastUserMessage.content.filter((block) =>
-        "type" in block && block.type === "text"
-      );
-      return textBlocks.map((block) => "text" in block ? block.text : "").join(
-        " ",
-      );
-    }
-
-    return "";
-  }
-
-  /**
-   * 构建清理后的消息列表（保留完整对话上下文，只移除 tool_use 和工具定义）
-   * 用于内部 AI 请求，避免 AI 再次调用工具
+   * 鏋勫缓娓呯悊鍚庣殑娑堟伅鍒楄〃锛堜繚鐣欏畬鏁村璇濅笂涓嬫枃锛屽彧绉婚櫎 tool_use 鍜屽伐鍏峰畾涔夛級
+   * 鐢ㄤ簬鍐呴儴 AI 璇锋眰锛岄伩鍏?AI 鍐嶆璋冪敤宸ュ叿
    */
   private buildCleanMessages(
     originalMessages: ClaudeMessage[],
-    userQuestion: string,
     additionalPrompt: string,
   ): ClaudeMessage[] {
     const cleanMessages: ClaudeMessage[] = [];
 
-    for (const msg of originalMessages) {
-      // 只保留 user 和 assistant 角色的消息
+    let lastUserMessageIndex = -1;
+    for (let i = originalMessages.length - 1; i >= 0; i--) {
+      if (originalMessages[i].role === "user") {
+        lastUserMessageIndex = i;
+        break;
+      }
+    }
+
+    for (const [messageIndex, msg] of originalMessages.entries()) {
+      // 鍙繚鐣?user 鍜?assistant 瑙掕壊鐨勬秷鎭
       if (msg.role !== "user" && msg.role !== "assistant") {
         continue;
       }
 
-      // 处理消息内容，过滤掉 tool_use 块
+      // 澶勭悊娑堟伅鍐呭锛岃繃婊ゆ帀 tool_use 鍧
       let cleanContent: string | ClaudeContentBlock[];
       if (typeof msg.content === "string") {
-        // 纯文本内容，如果是最后一条用户消息，追加 additionalPrompt
-        if (msg.role === "user" && msg.content === userQuestion) {
+        // 绾枃鏈唴瀹癸紝濡傛灉鏄渶鍚庝竴鏉＄敤鎴锋秷鎭紝杩藉姞 additionalPrompt
+        if (msg.role === "user" && messageIndex === lastUserMessageIndex) {
           cleanContent = `${msg.content}\n\n${additionalPrompt}`;
         } else {
           cleanContent = msg.content;
         }
       } else if (Array.isArray(msg.content)) {
-        // 数组内容，过滤掉 tool_use 块
-        const filteredBlocks = msg.content.filter((block) =>
-          !("type" in block && block.type === "tool_use")
-        );
+        // 鏁扮粍鍐呭锛岃繃婊ゆ帀 tool_use 鍧
+        const filteredBlocks = msg.content.filter((block) => {
+          const typedBlock = block as unknown as Record<string, unknown>;
+          return typedBlock.type !== "tool_use" && typedBlock.type !== "server_tool_use";
+        });
 
-        // 如果是最后一条用户消息，追加 additionalPrompt
-        if (msg.role === "user" && filteredBlocks.some(b => "type" in b && b.type === "text")) {
-          const textBlocks = filteredBlocks.filter((b): b is ClaudeTextBlock =>
-            "type" in b && b.type === "text"
-          );
-          if (textBlocks.length > 0) {
-            const lastTextIndex = filteredBlocks.findIndex(b => "type" in b && b.type === "text");
-            filteredBlocks[lastTextIndex] = {
-              ...textBlocks[0],
-              text: `${textBlocks[0].text}\n\n${additionalPrompt}`
+        // 濡傛灉鏄渶鍚庝竴鏉＄敤鎴锋秷鎭紝杩藉姞 additionalPrompt
+        if (msg.role === "user" && messageIndex === lastUserMessageIndex) {
+          let appended = false;
+          for (let blockIndex = filteredBlocks.length - 1; blockIndex >= 0; blockIndex--) {
+            const block = filteredBlocks[blockIndex];
+            if (!("type" in block) || block.type !== "text") continue;
+            const textBlock = block as ClaudeTextBlock;
+            filteredBlocks[blockIndex] = {
+              ...textBlock,
+              text: `${textBlock.text}\n\n${additionalPrompt}`,
             };
+            appended = true;
+            break;
+          }
+          if (!appended) {
+            filteredBlocks.push({
+              type: "text",
+              text: additionalPrompt,
+            } as ClaudeTextBlock);
           }
         }
         cleanContent = filteredBlocks;
@@ -1095,9 +1118,11 @@ https://example.com/page3
         cleanContent = msg.content;
       }
 
-      // 只有非空内容才添加
-      if (cleanContent &&
-          (typeof cleanContent === "string" ? cleanContent.length > 0 : cleanContent.length > 0)) {
+      // 鍙湁闈炵┖鍐呭鎵嶆坊鍔
+      if (
+        cleanContent &&
+        (typeof cleanContent === "string" ? cleanContent.length > 0 : cleanContent.length > 0)
+      ) {
         cleanMessages.push({
           role: msg.role,
           content: cleanContent,
@@ -1109,7 +1134,7 @@ https://example.com/page3
   }
 
   /**
-   * 流式调用上游 API 进行分析（普通模式）
+   * 娴佸紡璋冪敤涓婃父 API 杩涜鍒嗘瀽锛堟櫘閫氭ā寮忥級
    */
   private async streamUpstreamAnalysis(
     messages: ClaudeMessage[],
@@ -1119,25 +1144,24 @@ https://example.com/page3
     requestId: string,
     onStreamChunk: (text: string) => Promise<void>,
   ): Promise<void> {
-    // 构建分析提示词
-    const prompt = `Based on the following search results for the query "${query}", please provide a comprehensive analysis and answer:
+    // 鏋勫缓鍒嗘瀽鎻愮ず璇
+    const prompt =
+      `Based on the following search results for the query "${query}", please provide a comprehensive analysis and answer:
 
 ${searchSummary}
 
 IMPORTANT: Do NOT call web_search again. The search has already been performed above. Simply analyze the search results and provide a direct answer.`;
 
-    // 提取用户原始问题
-    const userQuestion = this.extractUserQuestion(messages);
+    // 鎻愬彇鐢ㄦ埛鍘熷闂
 
-    // 构建清理后的消息列表（移除工具定义）
-    const cleanMessages = this.buildCleanMessages(messages, userQuestion, prompt);
+    // 鏋勫缓娓呯悊鍚庣殑娑堟伅鍒楄〃锛堢Щ闄ゅ伐鍏峰畾涔夛級
+    const cleanMessages = this.buildCleanMessages(messages, prompt);
 
     await this.streamFromUpstream(cleanMessages, upstreamInfo, requestId, onStreamChunk);
   }
 
   /**
-   * 流式输出最终分析
-   */
+   * 娴佸紡杈撳嚭鏈€缁堝垎鏋?   */
   private async streamFinalAnalysis(
     messages: ClaudeMessage[],
     finalPrompt: string,
@@ -1145,17 +1169,16 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
     requestId: string,
     onStreamChunk: (text: string) => Promise<void>,
   ): Promise<void> {
-    // 提取用户原始问题
-    const userQuestion = this.extractUserQuestion(messages);
+    // 鎻愬彇鐢ㄦ埛鍘熷闂
 
-    // 构建清理后的消息列表（移除工具定义）
-    const cleanMessages = this.buildCleanMessages(messages, userQuestion, finalPrompt);
+    // 鏋勫缓娓呯悊鍚庣殑娑堟伅鍒楄〃锛堢Щ闄ゅ伐鍏峰畾涔夛級
+    const cleanMessages = this.buildCleanMessages(messages, finalPrompt);
 
     await this.streamFromUpstream(cleanMessages, upstreamInfo, requestId, onStreamChunk);
   }
 
   /**
-   * 通用流式调用上游 API
+   * 閫氱敤娴佸紡璋冪敤涓婃父 API
    */
   private async streamFromUpstream(
     messages: ClaudeMessage[],
@@ -1163,7 +1186,7 @@ IMPORTANT: Do NOT call web_search again. The search has already been performed a
     requestId: string,
     onStreamChunk: (text: string) => Promise<void>,
   ): Promise<void> {
-    // 使用 AIClient 进行流式请求
+    // 浣跨敤 AIClient 杩涜娴佸紡璇锋眰
     const context = this.createContextFromUpstreamInfo(upstreamInfo, requestId);
     const client = new AIClient(context);
 

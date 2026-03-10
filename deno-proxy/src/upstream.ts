@@ -1,33 +1,93 @@
 import { ProxyConfig } from "./config.ts";
 import { SSEWriter } from "./sse.ts";
-import { log, logPhase, LogPhase } from "./logging.ts";
+import { log, LogPhase, logPhase } from "./logging.ts";
 import { handleOpenAIStream } from "./handle_openai_stream.ts";
 import { handleAnthropicStream } from "./handle_anthropic_stream.ts";
 import { countTokensLocally } from "./token_counter.ts";
-import { RequestContext, ProtocolAdapterFactory } from "./ai_client/mod.ts";
+import { ProtocolAdapterFactory, RequestContext } from "./ai_client/mod.ts";
 import { ToolifyParser } from "./parser.ts";
 import type { ClaudeContentBlock } from "./types.ts";
 import { ToolSeparator } from "./tools/tool_separator.ts";
-import { ToolFormatConverter } from "./tools/tool_format_converter.ts";
 import { MessageFormatConverter } from "./tools/message_format_converter.ts";
 import { NativeToolCallStreamHandler } from "./tools/native_tool_call_stream_handler.ts";
+import { anthropicToOpenAIResponsesRequest } from "./openai_compat.ts";
+import { isAnthropicWebFetchTool, isAnthropicWebSearchTool } from "./tools/types.ts";
 
-/**
- * 格式化 system 字段（支持字符串或数组格式）
- */
+export class UpstreamRequestError extends Error {
+  status: number;
+  body: string;
+  payload?: unknown;
+
+  constructor(status: number, body: string) {
+    super(`Upstream returned ${status}: ${body}`);
+    this.name = "UpstreamRequestError";
+    this.status = status;
+    this.body = body;
+    try {
+      this.payload = JSON.parse(body);
+    } catch {
+      this.payload = undefined;
+    }
+  }
+}
+
+// 将 system 字段统一格式化为纯文本。
 function formatSystem(system: string | ClaudeContentBlock[] | undefined): string | undefined {
   if (!system) return undefined;
   if (typeof system === "string") return system;
-  // 处理数组格式
-  return system.map(b => b.type === "text" ? b.text : "").join("\n");
+  return system.map((b) => b.type === "text" ? b.text : "").join("\n");
 }
 
+function convertClaudeToolsToOpenAICompatible(tools: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return tools.map((tool) => {
+    if (isAnthropicWebSearchTool(tool)) {
+      return {
+        type: "web_search_preview",
+        user_location: tool.user_location,
+        allowed_domains: tool.allowed_domains,
+        blocked_domains: tool.blocked_domains,
+      };
+    }
+
+    if (isAnthropicWebFetchTool(tool)) {
+      return {
+        type: "web_fetch",
+      };
+    }
+
+    const existingFunction = tool.function;
+    if (existingFunction && typeof existingFunction === "object") {
+      return tool;
+    }
+
+    return {
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.input_schema ?? { type: "object", properties: {} },
+      },
+    };
+  });
+}
+
+function resolveWebKindByToolName(name: string | undefined): "web_search" | "web_fetch" | undefined {
+  if (!name) return undefined;
+  if (name === "web_search" || name === "web_search_preview" || name === "web_search_20250305") {
+    return "web_search";
+  }
+  if (name === "web_fetch" || name === "web_fetch_preview" || name === "web_fetch_20250910") {
+    return "web_fetch";
+  }
+  return undefined;
+}
+
+// 将内部请求按目标协议转发到上游，并处理流式/非流式响应。
 export async function forwardRequest(
   context: RequestContext,
   writer: SSEWriter | undefined,
   abortSignal?: AbortSignal,
 ) {
-  // 从 RequestContext 获取所有必要信息
   const requestId = context.getRequestId();
   const config = context.getConfig();
   const upstreamConfig = context.getUpstreamConfig();
@@ -35,7 +95,6 @@ export async function forwardRequest(
   const originalRequest = context.getOriginalRequest();
   const delimiter = context.getDelimiter();
 
-  // 🔑 调试日志：检查工具注入状态
   const systemText = formatSystem(enrichedRequest.system);
   log("debug", "Tool call check", {
     requestId,
@@ -47,36 +106,29 @@ export async function forwardRequest(
     enrichedMessagesCount: enrichedRequest.messages.length,
   });
 
-  // 记录工具注入信息
   if (delimiter && originalRequest.tools && originalRequest.tools.length > 0) {
     logPhase(requestId, LogPhase.ENRICHED, `Injected ${originalRequest.tools.length} tools`, {
       delimiter: delimiter.getMarkers().TC_START,
     });
   }
 
-  // 准备请求参数
   const isStream = originalRequest.stream === true;
-  const protocol = upstreamConfig.protocol as "openai" | "anthropic";
+  const protocol = upstreamConfig.protocol as "openai" | "openai-responses" | "anthropic";
 
   logPhase(requestId, LogPhase.UPSTREAM, `Forwarding to ${protocol.toUpperCase()}`, {
     model: upstreamConfig.model,
     url: upstreamConfig.baseUrl.split("/").pop(),
   });
 
-  // 计算输入 Token
   const localUsage = await countTokensLocally(enrichedRequest, config, requestId);
   const inputTokens = localUsage.input_tokens;
 
-  // 处理响应
   const thinkingEnabled = originalRequest.thinking?.type === "enabled";
 
-  // 🔑 检查是否支持原生工具调用
   const supportsNativeToolCalling = context.supportsNativeToolCall();
 
   if (isStream && writer) {
-    // 流式响应处理
     if (supportsNativeToolCalling && originalRequest.tools && originalRequest.tools.length > 0) {
-      // 🔑 原生工具调用路径
       logPhase(requestId, LogPhase.PROTOCOL, `Native tool calling mode`, {
         toolsCount: originalRequest.tools.length,
         protocol: protocol,
@@ -90,7 +142,6 @@ export async function forwardRequest(
       );
     }
 
-    // 🔑 传统 XML 注入路径（现有逻辑）
     if (delimiter && originalRequest.tools && originalRequest.tools.length > 0) {
       logPhase(requestId, LogPhase.PROTOCOL, `XML injection mode`, {
         toolsCount: originalRequest.tools.length,
@@ -103,7 +154,7 @@ export async function forwardRequest(
       "Content-Type": "application/json",
     };
 
-    if (protocol === "openai") {
+    if (protocol === "openai" || protocol === "openai-responses") {
       if (upstreamConfig.apiKey) {
         headers["Authorization"] = `Bearer ${upstreamConfig.apiKey}`;
       }
@@ -114,14 +165,38 @@ export async function forwardRequest(
       headers["anthropic-version"] = "2023-06-01";
     }
 
-    // 构建请求体
     let fetchBody: string;
     if (protocol === "openai") {
       const { mapClaudeToOpenAI } = await import("./map_claude_to_openai.ts");
       const supportsSystemPrompt = upstreamConfig.supportsSystemPrompt ?? true;
-      const openaiReq = mapClaudeToOpenAI(enrichedRequest, upstreamConfig.model, supportsSystemPrompt);
+      const openaiReq = mapClaudeToOpenAI(
+        enrichedRequest,
+        upstreamConfig.model,
+        supportsSystemPrompt,
+      );
       openaiReq.stream = true;
       fetchBody = JSON.stringify(openaiReq);
+      logPhase(requestId, LogPhase.FORMAT, "Built OpenAI Chat upstream payload", {
+        protocol,
+        stream: true,
+        requestBytes: fetchBody.length,
+        toolsCount: originalRequest.tools?.length ?? 0,
+      });
+    } else if (protocol === "openai-responses") {
+      const supportsSystemPrompt = upstreamConfig.supportsSystemPrompt ?? true;
+      fetchBody = JSON.stringify(
+        anthropicToOpenAIResponsesRequest(
+          enrichedRequest,
+          upstreamConfig.model,
+          supportsSystemPrompt,
+        ),
+      );
+      logPhase(requestId, LogPhase.FORMAT, "Built OpenAI Responses upstream payload", {
+        protocol,
+        stream: true,
+        requestBytes: fetchBody.length,
+        toolsCount: originalRequest.tools?.length ?? 0,
+      });
     } else {
       const anthropicReq = {
         ...enrichedRequest,
@@ -129,9 +204,14 @@ export async function forwardRequest(
         stream: true,
       };
       fetchBody = JSON.stringify(anthropicReq);
+      logPhase(requestId, LogPhase.FORMAT, "Built Anthropic upstream payload", {
+        protocol,
+        stream: true,
+        requestBytes: fetchBody.length,
+        toolsCount: originalRequest.tools?.length ?? 0,
+      });
     }
 
-    // 发送请求
     const upstreamStartTime = Date.now();
     const response = await fetch(upstreamConfig.baseUrl, {
       method: "POST",
@@ -145,13 +225,13 @@ export async function forwardRequest(
       logPhase(requestId, LogPhase.ERROR, `Upstream failed (${response.status})`, {
         error: errorText.slice(0, 200),
       });
-      throw new Error(`Upstream returned ${response.status}: ${errorText}`);
+      throw new UpstreamRequestError(response.status, errorText);
     }
 
     const ttfb = Date.now() - upstreamStartTime;
     logPhase(requestId, LogPhase.STREAM, `Receiving response (TTFB: ${ttfb}ms)`);
 
-    if (protocol === "openai") {
+    if (protocol === "openai" || protocol === "openai-responses") {
       return await handleOpenAIStream(
         response,
         writer,
@@ -185,25 +265,24 @@ export async function forwardRequest(
       );
     }
   } else {
-    // 非流式响应
     const adapter = ProtocolAdapterFactory.create(protocol);
 
-    // 构建请求头
     const headers = adapter.buildHeaders(upstreamConfig.apiKey);
 
-    // 构建请求体 - 格式化 system 字段
     const requestOptions: any = {
       max_tokens: originalRequest.max_tokens || 4096,
       temperature: originalRequest.temperature,
       top_p: originalRequest.top_p,
       metadata: {
+        ...(originalRequest.metadata && typeof originalRequest.metadata === "object"
+          ? originalRequest.metadata as Record<string, unknown>
+          : {}),
         model: upstreamConfig.model,
-        system: systemText, // 使用格式化后的字符串
-        supportsSystemPrompt: upstreamConfig.supportsSystemPrompt, // 传递系统提示词支持标志
+        system: systemText, 
+        supportsSystemPrompt: upstreamConfig.supportsSystemPrompt, 
       },
     };
 
-    // 🔑 如果支持原生工具调用，传递工具定义
     let separatedTools: ReturnType<typeof ToolSeparator.separate> | null = null;
     if (supportsNativeToolCalling && originalRequest.tools && originalRequest.tools.length > 0) {
       logPhase(requestId, LogPhase.ENRICHED, `Using native tool calling mode (non-stream)`, {
@@ -216,10 +295,10 @@ export async function forwardRequest(
       const allTools = [...separated.webTools, ...separated.nativeTools];
 
       if (protocol === "openai") {
-        // OpenAI 格式需要转换工具定义
-        requestOptions.tools = ToolFormatConverter.convertToolDefinitionsToOpenAI(allTools);
+        requestOptions.tools = convertClaudeToolsToOpenAICompatible(
+          allTools as Array<Record<string, unknown>>,
+        );
       } else {
-        // Anthropic 格式直接传递
         requestOptions.tools = allTools;
       }
 
@@ -228,10 +307,8 @@ export async function forwardRequest(
       }
     }
 
-    // 辅助函数：处理文本内容（支持工具解析）
     const processTextContent = (text: string, targetContent: Array<Record<string, unknown>>) => {
       if (delimiter) {
-        // 如果有 delimiter，尝试解析其中的工具调用
         const parser = new ToolifyParser(delimiter, thinkingEnabled, requestId);
         for (const char of text) {
           parser.feedChar(char);
@@ -256,20 +333,20 @@ export async function forwardRequest(
               targetContent.push({ type: "thinking", thinking: event.content } as any);
             }
           } else if (event.type === "tool_call_failed") {
-            // 解析失败，降级为文本
             if (event.content) {
               targetContent.push({ type: "text", text: event.content });
             }
           }
         }
       } else {
-        // 没有 delimiter，直接作为文本
         targetContent.push({ type: "text", text: text });
       }
     };
 
-    // 辅助函数：解析响应内容
-    const parseResponseContent = (aiResponse: any, targetContent: Array<Record<string, unknown>>) => {
+    const parseResponseContent = (
+      aiResponse: any,
+      targetContent: Array<Record<string, unknown>>,
+    ) => {
       if (protocol === "anthropic") {
         const raw = aiResponse.raw as Record<string, unknown>;
         const responseContent = raw?.content;
@@ -291,6 +368,57 @@ export async function forwardRequest(
         } else if (typeof aiResponse.content === "string") {
           processTextContent(aiResponse.content, targetContent);
         }
+      } else if (protocol === "openai-responses") {
+        if (Array.isArray(aiResponse.content)) {
+          const completedServerToolIds = new Set<string>();
+          for (const block of aiResponse.content) {
+            const b = block as Record<string, unknown>;
+            if (
+              (b.type === "web_search_tool_result" || b.type === "web_fetch_tool_result") &&
+              typeof b.tool_use_id === "string"
+            ) {
+              completedServerToolIds.add(b.tool_use_id);
+            }
+          }
+
+          for (const block of aiResponse.content) {
+            const b = block as Record<string, unknown>;
+            if (b.type === "text") {
+              processTextContent(String(b.text ?? ""), targetContent);
+              continue;
+            }
+
+            if (b.type === "thinking") {
+              const thinkingText = String(b.thinking ?? "");
+              if (thinkingText) {
+                targetContent.push({ type: "thinking", thinking: thinkingText } as any);
+              }
+              continue;
+            }
+
+            if (b.type === "tool_use" || b.type === "server_tool_use") {
+              if (b.type === "server_tool_use" && typeof b.id === "string" && completedServerToolIds.has(b.id)) {
+                continue;
+              }
+              targetContent.push({
+                type: "tool_use",
+                id: (b.id as string) || `toolu_${Date.now()}`,
+                name: (b.name as string) || "",
+                input: (b.input as Record<string, unknown>) || {},
+              });
+              continue;
+            }
+
+            if (b.type === "image") {
+              targetContent.push(b);
+            }
+          }
+          return;
+        }
+
+        if (typeof aiResponse.content === "string") {
+          processTextContent(aiResponse.content, targetContent);
+        }
       } else {
         const raw = aiResponse.raw as any;
         const message = raw?.choices?.[0]?.message;
@@ -305,11 +433,22 @@ export async function forwardRequest(
             for (const tc of toolCalls) {
               const func = tc.function as Record<string, unknown> | undefined;
               if (func) {
+                let parsedArguments: Record<string, unknown> = {};
+                if (typeof func.arguments === "string") {
+                  try {
+                    parsedArguments = JSON.parse(func.arguments) as Record<string, unknown>;
+                  } catch {
+                    parsedArguments = {};
+                  }
+                } else if (func.arguments && typeof func.arguments === "object") {
+                  parsedArguments = func.arguments as Record<string, unknown>;
+                }
+
                 targetContent.push({
                   type: "tool_use",
                   id: (tc.id as string) || `toolu_${Date.now()}`,
                   name: (func.name as string) || "",
-                  input: func.arguments ? JSON.parse(func.arguments as string) : {},
+                  input: parsedArguments,
                 });
               }
             }
@@ -320,8 +459,58 @@ export async function forwardRequest(
       }
     };
 
-    // 辅助函数：发送非流式请求并解析响应
-    const sendAndParse = async (messages: any[], opts: any) => {
+    const serializeCompatibilityContent = (value: unknown): string => {
+      if (typeof value === "string") {
+        return value;
+      }
+      if (Array.isArray(value)) {
+        return value
+          .map((item) => {
+            if (!item || typeof item !== "object") return "";
+            const block = item as Record<string, unknown>;
+            if (block.type === "text") return String(block.text ?? "");
+            if (block.type === "tool_result") return String(block.content ?? "");
+            return "";
+          })
+          .filter(Boolean)
+          .join("\n");
+      }
+      if (value && typeof value === "object") {
+        return JSON.stringify(value);
+      }
+      return "";
+    };
+
+    const buildCompatibilityRetryMessages = (messages: any[], sourceMessages: any[]): any[] | null => {
+      const lookupMessages = sourceMessages.length > 0 ? sourceMessages : messages;
+      const assistantMessages = lookupMessages.filter((msg) => msg?.role === "assistant");
+      const userMessages = lookupMessages.filter((msg) => msg?.role === "user");
+      const lastAssistant = assistantMessages[assistantMessages.length - 1];
+      const lastUser = userMessages[userMessages.length - 1];
+
+      const assistantBlocks = Array.isArray(lastAssistant?.content) ? lastAssistant.content : [];
+      const userBlocks = Array.isArray(lastUser?.content) ? lastUser.content : [];
+
+      const latestToolUse = [...assistantBlocks].reverse().find((block: any) => block?.type === "tool_use");
+      const latestToolResult = [...userBlocks].reverse().find((block: any) => block?.type === "tool_result");
+
+      if (!latestToolUse || !latestToolResult) {
+        return null;
+      }
+
+      const toolName = String(latestToolUse.name ?? "tool");
+      const toolResult = serializeCompatibilityContent(latestToolResult.content).trim();
+      if (!toolResult) {
+        return null;
+      }
+
+      return [{
+        role: "user",
+        content: `The tool ${toolName} returned ${toolResult}. Please answer the user's request using this result only.`,
+      }];
+    };
+
+    const sendAndParse = async (messages: any[], opts: any, allowCompatibilityRetry = true) => {
       const body = adapter.buildRequestBody(messages, opts);
       const resp = await fetch(upstreamConfig.baseUrl, {
         method: "POST",
@@ -332,10 +521,27 @@ export async function forwardRequest(
 
       if (!resp.ok) {
         const errorText = await resp.text();
+        const canRetryCompatibility = allowCompatibilityRetry &&
+          !supportsNativeToolCalling &&
+          !originalRequest.tools?.length &&
+          errorText.includes("EMPTY_RESPONSE");
+
+        if (canRetryCompatibility) {
+          const compatibilityMessages = buildCompatibilityRetryMessages(messages, originalRequest.messages ?? []);
+          if (compatibilityMessages) {
+            logPhase(requestId, LogPhase.PROTOCOL, "Retrying non-native follow-up with compatibility summary", {
+              protocol,
+              originalMessageCount: messages.length,
+              retriedMessageCount: compatibilityMessages.length,
+            });
+            return await sendAndParse(compatibilityMessages, opts, false);
+          }
+        }
+
         logPhase(requestId, LogPhase.ERROR, `Upstream failed (${resp.status})`, {
           error: errorText.slice(0, 200),
         });
-        throw new Error(`Upstream returned ${resp.status}: ${errorText}`);
+        throw new UpstreamRequestError(resp.status, errorText);
       }
 
       const json = await resp.json();
@@ -346,7 +552,6 @@ export async function forwardRequest(
       return { aiResponse: aiResp, content: parsedContent };
     };
 
-    // 首次请求
     const firstResult = await sendAndParse(
       supportsNativeToolCalling ? originalRequest.messages : enrichedRequest.messages,
       requestOptions,
@@ -354,12 +559,16 @@ export async function forwardRequest(
 
     let content = firstResult.content;
     let lastAiResponse = firstResult.aiResponse;
+    let stopReasonOverride: string | undefined;
 
-    // 🔑 非流式原生路径：Web 工具拦截多轮循环
     if (supportsNativeToolCalling && separatedTools && separatedTools.webTools.length > 0) {
-      const webToolNames = new Set(separatedTools.webTools.map((t: any) => t.name || ""));
+      const webSearchToolDefinition = separatedTools.webTools.find((tool) =>
+        isAnthropicWebSearchTool(tool)
+      ) as Record<string, unknown> | undefined;
+      const webFetchToolDefinition = separatedTools.webTools.find((tool) =>
+        isAnthropicWebFetchTool(tool)
+      );
 
-      // 创建 interceptor（如果可用）
       const interceptor = config.webTools && config.firecrawl
         ? new (await import("./tools/tool_interceptor.ts")).ToolInterceptor(
           config.firecrawl,
@@ -367,54 +576,117 @@ export async function forwardRequest(
         )
         : null;
 
-      // 维护消息历史用于多轮调用
       let messageHistory = [...(originalRequest.messages || [])];
       let maxRounds = 10;
       let currentRound = 0;
+      const upstreamInfo = {
+        baseUrl: upstreamConfig.baseUrl,
+        apiKey: upstreamConfig.apiKey,
+        model: upstreamConfig.model,
+        protocol: upstreamConfig.protocol as "openai" | "openai-responses" | "anthropic",
+      };
+
+      const buildEffectiveSearchDefinition = (toolInput: Record<string, unknown>) => {
+        if (!webSearchToolDefinition) return undefined;
+        const filters = (toolInput.filters && typeof toolInput.filters === "object")
+          ? toolInput.filters as Record<string, unknown>
+          : undefined;
+
+        return {
+          ...webSearchToolDefinition,
+          allowed_domains: Array.isArray(toolInput.allowed_domains)
+            ? toolInput.allowed_domains
+            : Array.isArray(toolInput.domains)
+            ? toolInput.domains
+            : Array.isArray(filters?.allowed_domains)
+            ? filters.allowed_domains
+            : webSearchToolDefinition.allowed_domains,
+          blocked_domains: Array.isArray(toolInput.blocked_domains)
+            ? toolInput.blocked_domains
+            : Array.isArray(filters?.blocked_domains)
+            ? filters.blocked_domains
+            : webSearchToolDefinition.blocked_domains,
+        };
+      };
 
       while (currentRound < maxRounds) {
-        // 检查当前 content 中是否有 Web 工具调用
         const webToolUses = content.filter(
-          (b) => b.type === "tool_use" && webToolNames.has(b.name as string),
+          (b) => b.type === "tool_use" && !!resolveWebKindByToolName(String(b.name ?? "")),
         );
 
         if (webToolUses.length === 0) break;
 
         if (!interceptor) {
-          log("warn", "Web tool calls found but no ToolInterceptor configured, skipping interception", {
-            requestId,
-            webToolCount: webToolUses.length,
-          });
+          log(
+            "warn",
+            "Web tool calls found but no ToolInterceptor configured, skipping interception",
+            {
+              requestId,
+              webToolCount: webToolUses.length,
+            },
+          );
           break;
         }
 
         currentRound++;
-        logPhase(requestId, LogPhase.ENRICHED, `Non-stream web tool interception round ${currentRound}`, {
-          webToolCount: webToolUses.length,
-        });
+        logPhase(
+          requestId,
+          LogPhase.ENRICHED,
+          `Non-stream web tool interception round ${currentRound}`,
+          {
+            webToolCount: webToolUses.length,
+          },
+        );
 
-        // 将 assistant 响应添加到消息历史
         messageHistory.push({
           role: "assistant",
           content: content as any,
         });
 
-        // 执行每个 Web 工具调用并收集结果
+        const canUseSmartSearch = interceptor.isSmartSearchMode() &&
+          webToolUses.length === 1 &&
+          resolveWebKindByToolName(String(webToolUses[0].name ?? "")) === "web_search";
+        if (canUseSmartSearch) {
+          const smartToolUse = webToolUses[0];
+          const smartToolInput = (smartToolUse.input as Record<string, unknown>) || {};
+          const query = typeof smartToolInput.query === "string" ? smartToolInput.query : "";
+          const effectiveSearchTool = buildEffectiveSearchDefinition(smartToolInput);
+
+          if (query && effectiveSearchTool) {
+            const smartResult = await interceptor.handleSmartWebSearchWithQuery(
+              effectiveSearchTool as any,
+              query,
+              messageHistory,
+              upstreamInfo,
+              requestId,
+            );
+
+            content = [
+              smartResult.serverToolUse as any,
+              smartResult.toolResult as any,
+              { type: "text", text: smartResult.llmAnalysis.text },
+            ];
+            stopReasonOverride = "end_turn";
+            break;
+          }
+        }
+
         const toolResults: any[] = [];
         for (const toolUse of webToolUses) {
           const toolName = toolUse.name as string;
           const toolId = toolUse.id as string;
           const toolInput = toolUse.input as Record<string, unknown>;
+          const webKind = resolveWebKindByToolName(toolName);
 
           try {
             let resultContent: string;
 
-            if (toolName === "web_search") {
+            if (webKind === "web_search") {
               const query = toolInput.query as string;
-              const webSearchTool = separatedTools.webTools.find((t: any) => t.name === "web_search");
-              if (webSearchTool && query) {
+              const effectiveSearchTool = buildEffectiveSearchDefinition(toolInput);
+              if (effectiveSearchTool && query) {
                 const searchResult = await interceptor.handleWebSearchWithQuery(
-                  webSearchTool as any,
+                  effectiveSearchTool as any,
                   query,
                   requestId,
                 );
@@ -422,12 +694,11 @@ export async function forwardRequest(
               } else {
                 resultContent = "Error: Invalid web_search parameters";
               }
-            } else if (toolName === "web_fetch") {
+            } else if (webKind === "web_fetch") {
               const url = toolInput.url as string;
-              const webFetchTool = separatedTools.webTools.find((t: any) => t.name === "web_fetch");
-              if (webFetchTool && url) {
+              if (webFetchToolDefinition && url) {
                 const fetchResult = await interceptor.handleWebFetch(
-                  webFetchTool as any,
+                  webFetchToolDefinition as any,
                   url,
                   requestId,
                 );
@@ -458,13 +729,11 @@ export async function forwardRequest(
           }
         }
 
-        // 将工具结果添加到消息历史
         messageHistory.push({
           role: "user",
           content: toolResults,
         });
 
-        // 重新发送请求
         const retryResult = await sendAndParse(messageHistory, requestOptions);
         content = retryResult.content;
         lastAiResponse = retryResult.aiResponse;
@@ -484,22 +753,14 @@ export async function forwardRequest(
       role: "assistant",
       model: upstreamConfig.model,
       content,
-      stop_reason: lastAiResponse.finish_reason || "end_turn",
+      stop_reason: stopReasonOverride || lastAiResponse.finish_reason || "end_turn",
       stop_sequence: null,
       usage: lastAiResponse.usage,
     };
   }
 }
 
-/**
- * 处理原生工具调用模式的请求
- *
- * 关键逻辑：
- * 1. 分离 Web 工具和其他工具
- * 2. 将工具定义转换为上游格式
- * 3. 发送请求到上游
- * 4. 使用 NativeToolCallStreamHandler 处理响应
- */
+// 处理支持原生工具调用的上游请求。
 async function handleNativeToolCalling(
   context: RequestContext,
   writer: SSEWriter,
@@ -509,9 +770,8 @@ async function handleNativeToolCalling(
   const config = context.getConfig();
   const upstreamConfig = context.getUpstreamConfig();
   const originalRequest = context.getOriginalRequest();
-  const protocol = upstreamConfig.protocol as "openai" | "anthropic";
+  const protocol = upstreamConfig.protocol as "openai" | "openai-responses" | "anthropic";
 
-  // 1. 分离工具
   const { webTools, nativeTools } = ToolSeparator.separate(originalRequest.tools);
 
   logPhase(requestId, LogPhase.ENRICHED, `Separated tools`, {
@@ -519,7 +779,6 @@ async function handleNativeToolCalling(
     nativeToolsCount: nativeTools.length,
   });
 
-  // 2. 创建 ToolInterceptor（用于执行 Web 工具）
   const interceptor = config.webTools && config.firecrawl
     ? new (await import("./tools/tool_interceptor.ts")).ToolInterceptor(
       config.firecrawl,
@@ -527,132 +786,171 @@ async function handleNativeToolCalling(
     )
     : null;
 
-  // 3. 构建请求
-  let requestBody: string;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
+  const allTools = [...webTools, ...nativeTools];
 
   if (protocol === "openai") {
-    // 设置认证头
     if (upstreamConfig.apiKey) {
       headers["Authorization"] = `Bearer ${upstreamConfig.apiKey}`;
     }
 
-    // 转换为 OpenAI 格式，传递系统提示词支持标志
-    const supportsSystemPrompt = upstreamConfig.supportsSystemPrompt ?? true;
-    const openaiRequest = MessageFormatConverter.anthropicToOpenAI(originalRequest, supportsSystemPrompt);
-
-    // 转换工具定义（包括 Web 工具和原生工具）
-    const allTools = [...webTools, ...nativeTools];
-    if (allTools.length > 0) {
-      openaiRequest.tools = ToolFormatConverter.convertToolDefinitionsToOpenAI(allTools);
-    } else {
-      delete openaiRequest.tools; // 如果没有工具，删除 tools 字段
+    // noop
+  } else if (protocol === "openai-responses") {
+    if (upstreamConfig.apiKey) {
+      headers["Authorization"] = `Bearer ${upstreamConfig.apiKey}`;
     }
 
-    // 覆盖模型名
-    openaiRequest.model = upstreamConfig.model;
-    openaiRequest.stream = true;
-
-    requestBody = JSON.stringify(openaiRequest);
+    // noop
   } else if (protocol === "anthropic") {
-    // 设置认证头
     if (upstreamConfig.apiKey) {
       headers["x-api-key"] = upstreamConfig.apiKey;
     }
     headers["anthropic-version"] = "2023-06-01";
 
-    // Anthropic 格式，构建干净的请求体
-    const allTools = [...webTools, ...nativeTools];
-    const anthropicRequest: Record<string, any> = {
-      model: upstreamConfig.model,
-      max_tokens: originalRequest.max_tokens || 4096,
-      messages: originalRequest.messages,
-      stream: true,
-    };
-
-    // 添加可选字段（只添加有值且符合 Anthropic API 标准的字段）
-    if (originalRequest.system) {
-      anthropicRequest.system = originalRequest.system;
-    }
-    if (originalRequest.temperature !== undefined) {
-      anthropicRequest.temperature = originalRequest.temperature;
-    }
-    if (originalRequest.top_p !== undefined) {
-      anthropicRequest.top_p = originalRequest.top_p;
-    }
-    if (originalRequest.stop_sequences) {
-      anthropicRequest.stop_sequences = originalRequest.stop_sequences;
-    }
-    if (allTools.length > 0) {
-      anthropicRequest.tools = allTools;
-    }
-    if (originalRequest.tool_choice !== undefined) {
-      anthropicRequest.tool_choice = originalRequest.tool_choice;
-    }
-    // Extended Thinking 是标准功能
-    if (originalRequest.thinking) {
-      anthropicRequest.thinking = originalRequest.thinking;
-    }
-
-    // 移除所有 undefined 值的字段
-    Object.keys(anthropicRequest).forEach(key => {
-      if (anthropicRequest[key] === undefined) {
-        delete anthropicRequest[key];
-      }
-    });
-
-    requestBody = JSON.stringify(anthropicRequest);
+    // noop
   } else {
     throw new Error(`Unsupported protocol for native tool calling: ${protocol}`);
   }
 
-  // 3. 发送请求
-  logPhase(requestId, LogPhase.UPSTREAM, `Sending native tool call request`, {
-    protocol,
-    url: upstreamConfig.baseUrl,
-    nativeToolsCount: nativeTools.length,
-  });
-
-  // 调试：记录请求体
-  log("debug", "Request body for native tool calling", {
-    requestId,
-    bodyPreview: requestBody.substring(0, 500),
-    bodyLength: requestBody.length,
-  });
-
-  const upstreamStartTime = Date.now();
-  const response = await fetch(upstreamConfig.baseUrl, {
-    method: "POST",
-    headers,
-    body: requestBody,
-    signal: abortSignal,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    logPhase(requestId, LogPhase.ERROR, `Upstream failed (${response.status})`, {
-      error: errorText.slice(0, 200),
-    });
-    throw new Error(`Upstream returned ${response.status}: ${errorText}`);
-  }
-
-  const ttfb = Date.now() - upstreamStartTime;
-  logPhase(requestId, LogPhase.STREAM, `Receiving native tool call response (TTFB: ${ttfb}ms)`);
-
-  // 4. 处理流式响应（支持多轮工具调用）
   if (webTools.length > 0 && !interceptor) {
-    throw new Error("ToolInterceptor is required for handling web tools in native tool calling mode");
+    throw new Error(
+      "ToolInterceptor is required for handling web tools in native tool calling mode",
+    );
   }
 
-  const handler = new NativeToolCallStreamHandler(context, writer, webTools, interceptor);
-  await handler.handleStream(response);
+  const supportsSystemPrompt = upstreamConfig.supportsSystemPrompt ?? true;
+  const maxRounds = 10;
 
-  // 5. 不再进行多轮循环，直接结束
-  // 根据用户要求，原生模式也要像非原生模式一样，将工具调用结果返回给客户端
-  // 由客户端决定是否发起下一轮请求
-  log("info", "Native tool call stream finished (no auto-loop)", {
+  const buildRequestBody = (messages: any[]): string => {
+    if (protocol === "openai") {
+      const openaiRequest = MessageFormatConverter.anthropicToOpenAI(
+        {
+          ...originalRequest,
+          messages,
+          tools: allTools.length > 0 ? allTools : undefined,
+        } as any,
+        supportsSystemPrompt,
+      );
+      openaiRequest.model = upstreamConfig.model;
+      openaiRequest.stream = true;
+      return JSON.stringify(openaiRequest);
+    }
+
+    if (protocol === "openai-responses") {
+      return JSON.stringify(
+        anthropicToOpenAIResponsesRequest(
+          {
+            ...originalRequest,
+            messages,
+            model: upstreamConfig.model,
+            tools: allTools.length > 0 ? allTools : undefined,
+            stream: true,
+          } as any,
+          upstreamConfig.model,
+          supportsSystemPrompt,
+        ),
+      );
+    }
+
+    const anthropicRequest: Record<string, unknown> = {
+      model: upstreamConfig.model,
+      max_tokens: originalRequest.max_tokens || 4096,
+      messages,
+      stream: true,
+      system: originalRequest.system,
+      temperature: originalRequest.temperature,
+      top_p: originalRequest.top_p,
+      stop_sequences: (originalRequest as any).stop_sequences,
+      tools: allTools.length > 0 ? allTools : undefined,
+      tool_choice: originalRequest.tool_choice,
+      thinking: originalRequest.thinking,
+    };
+    Object.keys(anthropicRequest).forEach((key) => {
+      if (anthropicRequest[key] === undefined) {
+        delete anthropicRequest[key];
+      }
+    });
+    return JSON.stringify(anthropicRequest);
+  };
+
+  let messageHistory = [...(originalRequest.messages || [])];
+  const handler = new NativeToolCallStreamHandler(context, writer, webTools, interceptor, messageHistory);
+  let executedRounds = 0;
+  let hasPendingFollowUp = false;
+
+  for (let round = 1; round <= maxRounds; round++) {
+    const requestBody = buildRequestBody(messageHistory);
+
+    logPhase(requestId, LogPhase.UPSTREAM, `Sending native tool call request (round ${round})`, {
+      protocol,
+      url: upstreamConfig.baseUrl,
+      nativeToolsCount: nativeTools.length,
+      webToolsCount: webTools.length,
+      nativeToolNames: nativeTools.map((tool: any) => tool.name ?? tool.type).filter(Boolean),
+      webToolNames: webTools.map((tool: any) => tool.name ?? tool.type).filter(Boolean),
+      bodyLength: requestBody.length,
+    });
+
+    log("debug", "Request body for native tool calling", {
+      requestId,
+      round,
+      bodyPreview: requestBody.substring(0, 500),
+      bodyLength: requestBody.length,
+    });
+
+    const upstreamStartTime = Date.now();
+    const response = await fetch(upstreamConfig.baseUrl, {
+      method: "POST",
+      headers,
+      body: requestBody,
+      signal: abortSignal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logPhase(requestId, LogPhase.ERROR, `Upstream failed (${response.status})`, {
+        round,
+        error: errorText.slice(0, 200),
+      });
+      throw new UpstreamRequestError(response.status, errorText);
+    }
+
+    const ttfb = Date.now() - upstreamStartTime;
+    logPhase(requestId, LogPhase.STREAM, `Receiving native tool call response (round ${round}, TTFB: ${ttfb}ms)`);
+
+    hasPendingFollowUp = await handler.handleStream(response);
+    executedRounds = round;
+    messageHistory = handler.getMessageHistory();
+
+    if (!hasPendingFollowUp) {
+      break;
+    }
+  }
+
+  if (hasPendingFollowUp && executedRounds >= maxRounds) {
+    log("warn", "Native tool call stream reached max auto-intercept rounds", {
+      requestId,
+      maxRounds,
+    });
+    await writer.send({
+      event: "message_delta",
+      data: {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 0 },
+      },
+    });
+    await writer.send({
+      event: "message_stop",
+      data: { type: "message_stop" },
+    });
+  }
+
+  log("info", "Native tool call stream finished", {
     requestId,
+    rounds: executedRounds,
+    autoIntercepted: hasPendingFollowUp ? maxRounds : Math.max(0, executedRounds - 1),
   });
 }

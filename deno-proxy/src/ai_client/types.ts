@@ -1,13 +1,13 @@
 /**
- * AI 请求客户端类型定义
+ * AI 璇锋眰瀹㈡埛绔被鍨嬪畾涔?
  *
- * 本文件定义了 AI 请求相关的所有核心类型，包括：
- * - 上游配置
- * - 请求选项
- * - 响应格式
- * - 协议类型
- * - 工具调用模式
- * - 请求格式
+ * 鏈枃浠跺畾涔変簡 AI 璇锋眰鐩稿叧鐨勬墍鏈夋牳蹇冪被鍨嬶紝鍖呮嫭锛?
+ * - 涓婃父閰嶇疆
+ * - 璇锋眰閫夐」
+ * - 鍝嶅簲鏍煎紡
+ * - 鍗忚绫诲瀷
+ * - 宸ュ叿璋冪敤妯″紡
+ * - 璇锋眰鏍煎紡
  */
 
 import { ClaudeMessage, ClaudeRequest } from "../types.ts";
@@ -15,80 +15,80 @@ import { ProxyConfig } from "../config.ts";
 import { ToolCallDelimiter } from "../signals.ts";
 
 /**
- * 协议类型枚举
+ * 鍗忚绫诲瀷鏋氫妇
  *
- * 📌 当前实现：openai, anthropic
- * 🔮 未来扩展：gemini（预留）
+ * 馃搶 褰撳墠瀹炵幇锛歰penai, anthropic
+ * 馃敭 鏈潵鎵╁睍锛歡emini锛堥鐣欙級
  */
-export type Protocol = "openai" | "anthropic" | "gemini";
+export type Protocol = "openai" | "openai-responses" | "anthropic" | "gemini";
 
 /**
- * 工具调用模式枚举
+ * 宸ュ叿璋冪敤妯″紡鏋氫妇
  *
- * 📌 当前实现：prompt_injection（提示词注入）
- * 🔮 未来扩展：native（原生工具调用）、auto（自动选择）
+ * 馃搶 褰撳墠瀹炵幇锛歱rompt_injection锛堟彁绀鸿瘝娉ㄥ叆锛?
+ * 馃敭 鏈潵鎵╁睍锛歯ative锛堝師鐢熷伐鍏疯皟鐢級銆乤uto锛堣嚜鍔ㄩ€夋嫨锛?
  */
 export type ToolCallMode = "prompt_injection" | "native" | "auto";
 
 /**
- * 请求格式枚举
+ * 璇锋眰鏍煎紡鏋氫妇
  *
- * 📌 当前实现：anthropic（Claude 格式）
- * 🔮 未来扩展：openai（OpenAI 格式，支持自动转换）
+ * 馃搶 褰撳墠瀹炵幇锛歛nthropic锛圕laude 鏍煎紡锛?
+ * 馃敭 鏈潵鎵╁睍锛歰penai锛圤penAI 鏍煎紡锛屾敮鎸佽嚜鍔ㄨ浆鎹級
  */
 export type RequestFormat = "anthropic" | "openai";
 
 /**
- * 上游配置
- * 封装解析后的渠道信息
+ * 涓婃父閰嶇疆
+ * 灏佽瑙ｆ瀽鍚庣殑娓犻亾淇℃伅
  */
 export interface UpstreamConfig {
-  /** 上游 API 基础 URL */
+  /** 涓婃父 API 鍩虹 URL */
   baseUrl: string;
 
-  /** 上游 API 密钥 */
+  /** 涓婃父 API 瀵嗛挜 */
   apiKey?: string;
 
-  /** 上游模型名称 */
+  /** 涓婃父妯″瀷鍚嶇О */
   model: string;
 
-  /** 上游协议类型 */
+  /** 涓婃父鍗忚绫诲瀷 */
   protocol: Protocol;
 
-  /** 是否支持原生工具调用（默认 false，使用 XML 注入） */
+  /** 鏄惁鏀寔鍘熺敓宸ュ叿璋冪敤锛堥粯璁?false锛屼娇鐢?XML 娉ㄥ叆锛?*/
   supportsNativeToolCalling?: boolean;
 
-  /** 是否支持系统提示词（默认 true，不支持时转换为 user 消息） */
+  /** 鏄惁鏀寔绯荤粺鎻愮ず璇嶏紙榛樿 true锛屼笉鏀寔鏃惰浆鎹负 user 娑堟伅锛?*/
   supportsSystemPrompt?: boolean;
 }
 
 /**
- * AI 请求选项
- * 统一管理请求参数
+ * AI 璇锋眰閫夐」
+ * 缁熶竴绠＄悊璇锋眰鍙傛暟
  */
 export interface AIRequestOptions {
-  /** 是否启用流式输出 */
+  /** 鏄惁鍚敤娴佸紡杈撳嚭 */
   stream?: boolean;
 
-  /** 最大生成 token 数 */
+  /** 鏈€澶х敓鎴?token 鏁?*/
   max_tokens?: number;
 
-  /** 温度参数（0-1） */
+  /** 娓╁害鍙傛暟锛?-1锛?*/
   temperature?: number;
 
-  /** Top-P 采样参数（0-1） */
+  /** Top-P 閲囨牱鍙傛暟锛?-1锛?*/
   top_p?: number;
 
-  /** 元数据 */
+  /** 鍏冩暟鎹?*/
   metadata?: Record<string, unknown>;
 
-  /** 工具定义 */
+  /** 宸ュ叿瀹氫箟 */
   tools?: unknown[];
 
-  /** 工具选择策略 */
+  /** 宸ュ叿閫夋嫨绛栫暐 */
   tool_choice?: unknown;
 
-  /** 思考配置 */
+  /** 鎬濊€冮厤缃?*/
   thinking?: {
     type: "enabled" | "disabled";
     budget_tokens?: number;
@@ -96,114 +96,114 @@ export interface AIRequestOptions {
 }
 
 /**
- * AI 响应格式
- * 统一的响应结构
+ * AI 鍝嶅簲鏍煎紡
+ * 缁熶竴鐨勫搷搴旂粨鏋?
  */
 export interface AIResponse {
-  /** 响应内容 */
+  /** 鍝嶅簲鍐呭 */
   content: string | ClaudeMessage["content"];
 
-  /** Token 使用情况 */
+  /** Token 浣跨敤鎯呭喌 */
   usage?: {
     input_tokens: number;
     output_tokens: number;
   };
 
-  /** 完成原因 */
+  /** 瀹屾垚鍘熷洜 */
   finish_reason?: string;
 
-  /** 原始响应（用于调试） */
+  /** 鍘熷鍝嶅簲锛堢敤浜庤皟璇曪級 */
   raw?: unknown;
 }
 
 /**
- * 流式响应块
+ * 娴佸紡鍝嶅簲鍧?
  */
 export interface StreamChunk {
-  /** 文本内容 */
+  /** 鏂囨湰鍐呭 */
   text?: string;
 
-  /** 事件类型 */
+  /** 浜嬩欢绫诲瀷 */
   type?: string;
 
-  /** 原始数据 */
+  /** 鍘熷鏁版嵁 */
   data?: unknown;
 }
 
 /**
- * 流式回调函数
- * 用于处理流式响应
+ * 娴佸紡鍥炶皟鍑芥暟
+ * 鐢ㄤ簬澶勭悊娴佸紡鍝嶅簲
  */
 export type StreamCallback = (chunk: StreamChunk) => Promise<void>;
 
 /**
- * 请求上下文数据
- * 用于传递给 RequestContext 类
+ * 璇锋眰涓婁笅鏂囨暟鎹?
+ * 鐢ㄤ簬浼犻€掔粰 RequestContext 绫?
  */
 export interface RequestContextData {
-  /** 上游配置 */
+  /** 涓婃父閰嶇疆 */
   upstreamConfig: UpstreamConfig;
 
-  /** 原始请求 */
+  /** 鍘熷璇锋眰 */
   originalRequest: ClaudeRequest;
 
-  /** 增强后的请求 */
+  /** 澧炲己鍚庣殑璇锋眰 */
   enrichedRequest: ClaudeRequest;
 
-  /** 工具调用分隔符 */
+  /** 宸ュ叿璋冪敤鍒嗛殧绗?*/
   delimiter?: ToolCallDelimiter;
 
-  /** 全局配置 */
+  /** 鍏ㄥ眬閰嶇疆 */
   config: ProxyConfig;
 
-  /** 请求 ID */
+  /** 璇锋眰 ID */
   requestId: string;
 
-  /** 请求格式 */
+  /** 璇锋眰鏍煎紡 */
   requestFormat: RequestFormat;
 
-  /** 工具调用模式 */
+  /** 宸ュ叿璋冪敤妯″紡 */
   toolCallMode: ToolCallMode;
 
-  /** 客户端 API 密钥（用于透传） */
+  /** 瀹㈡埛绔?API 瀵嗛挜锛堢敤浜庨€忎紶锛?*/
   clientApiKey?: string;
 }
 
 /**
- * 日志级别
+ * 鏃ュ織绾у埆
  */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 /**
- * 日志元数据
+ * 鏃ュ織鍏冩暟鎹?
  */
 export interface LogMetadata {
-  /** 请求 ID */
+  /** 璇锋眰 ID */
   requestId?: string;
 
-  /** 请求阶段 */
+  /** 璇锋眰闃舵 */
   phase?: string;
 
-  /** 其他元数据 */
+  /** 鍏朵粬鍏冩暟鎹?*/
   [key: string]: unknown;
 }
 
 /**
- * 性能指标
+ * 鎬ц兘鎸囨爣
  */
 export interface PerformanceMetrics {
-  /** 首字节时间（TTFB） */
+  /** 棣栧瓧鑺傛椂闂达紙TTFB锛?*/
   ttfb?: number;
 
-  /** 总耗时 */
+  /** 鎬昏€楁椂 */
   totalTime?: number;
 
-  /** 输入 token 数 */
+  /** 杈撳叆 token 鏁?*/
   inputTokens?: number;
 
-  /** 输出 token 数 */
+  /** 杈撳嚭 token 鏁?*/
   outputTokens?: number;
 
-  /** 重试次数 */
+  /** 閲嶈瘯娆℃暟 */
   retryCount?: number;
 }

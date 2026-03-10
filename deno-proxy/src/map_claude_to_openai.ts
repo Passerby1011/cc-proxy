@@ -1,23 +1,34 @@
-import {
+﻿import {
   ClaudeRequest,
   OpenAIChatMessage,
   OpenAIChatRequest,
   OpenAIContentBlock,
   OpenAITextBlock,
 } from "./types.ts";
+import { OPENAI_CHAT_PASSTHROUGH_METADATA_KEY } from "./tools/message_format_converter.ts";
 
-// 思考模式相关的提示符
-const THINKING_HINT = "<antml\b:thinking_mode>interleaved</antml><antml\b:max_thinking_length>16000</antml>";
+const THINKING_HINT = "<antml\\b:thinking_mode>interleaved</antml><antml\\b:max_thinking_length>16000</antml>";
 
 function mapRole(role: string): "user" | "assistant" {
   return role === "assistant" ? "assistant" : "user";
 }
 
+function getOpenAIChatPassthrough(body: ClaudeRequest): Record<string, unknown> {
+  const metadata = body.metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return {};
+  }
+
+  const passthrough = (metadata as Record<string, unknown>)[OPENAI_CHAT_PASSTHROUGH_METADATA_KEY];
+  if (!passthrough || typeof passthrough !== "object") {
+    return {};
+  }
+
+  return passthrough as Record<string, unknown>;
+}
+
 /**
  * 将已增强（已处理工具注入和文本化）的 ClaudeRequest 转换为 OpenAIChatRequest
- * @param body - Claude 格式的请求体
- * @param requestModel - 目标模型名称
- * @param supportsSystemPrompt - 是否支持系统提示词（默认 true，不支持时转换为 user 消息）
  */
 export function mapClaudeToOpenAI(
   body: ClaudeRequest,
@@ -29,8 +40,7 @@ export function mapClaudeToOpenAI(
   }
 
   const messages: OpenAIChatMessage[] = [];
-  
-  // 1. 处理 System Message
+
   if (body.system) {
     let systemContent = "";
     if (typeof body.system === "string") {
@@ -40,14 +50,15 @@ export function mapClaudeToOpenAI(
         .map((block) => (block.type === "text" ? block.text : ""))
         .join("\n");
     }
-    // 根据 supportsSystemPrompt 配置决定使用 system 还是 user 角色
-    messages.push({ 
-      role: supportsSystemPrompt ? "system" : "user", 
-      content: systemContent 
-    });
+
+    if (systemContent) {
+      messages.push({
+        role: supportsSystemPrompt ? "system" : "user",
+        content: systemContent,
+      });
+    }
   }
 
-  // 2. 处理 Messages
   for (const message of body.messages) {
     const openaiContent: OpenAIContentBlock[] = [];
 
@@ -64,14 +75,15 @@ export function mapClaudeToOpenAI(
               url: `data:${block.source.media_type};base64,${block.source.data}`,
             },
           });
+        } else if (block.type === "thinking") {
+          openaiContent.push({
+            type: "text",
+            text: `<thinking>${block.thinking}</thinking>`,
+          });
         }
-        // tool_use, tool_result, thinking 应该在 enrichClaudeRequest 中被转成了文本
-        // 如果这里还存在，说明 enrichClaudeRequest 没处理或者我们想保留它们的原生处理
-        // 目前为了简单，非文本非图片直接忽略或作为文本（如果在 content[] 里）
       }
     }
 
-    // 如果是用户消息且启用了思考模式，在最后一个文本块后添加思考提示符
     if (message.role === "user" && body.thinking && body.thinking.type === "enabled") {
       const lastTextBlock = [...openaiContent].reverse().find((b) => b.type === "text") as
         | OpenAITextBlock
@@ -89,7 +101,6 @@ export function mapClaudeToOpenAI(
     });
   }
 
-  // 3. 在最后一条消息添加继续回复的引导（保持原有逻辑）
   if (messages.length > 0) {
     const lastMessage = messages[messages.length - 1];
     if (Array.isArray(lastMessage.content)) {
@@ -105,12 +116,36 @@ export function mapClaudeToOpenAI(
     }
   }
 
-  return {
+  const requestBody: OpenAIChatRequest & Record<string, unknown> = {
     model: requestModel,
     stream: true,
-    temperature: body.temperature ?? 0.2,
-    top_p: body.top_p ?? 1,
     max_tokens: body.max_tokens,
     messages,
   };
+
+  if (body.temperature !== undefined) {
+    requestBody.temperature = body.temperature;
+  }
+  if (body.top_p !== undefined) {
+    requestBody.top_p = body.top_p;
+  }
+
+  const stopSequences = (body as any).stop_sequences;
+  if (typeof stopSequences === "string") {
+    requestBody.stop = stopSequences;
+  } else if (Array.isArray(stopSequences)) {
+    const normalized = stopSequences.filter((item): item is string => typeof item === "string");
+    if (normalized.length > 0) {
+      requestBody.stop = normalized;
+    }
+  }
+
+  const passthrough = getOpenAIChatPassthrough(body);
+  for (const [key, value] of Object.entries(passthrough)) {
+    if (value === undefined) continue;
+    if (requestBody[key] !== undefined) continue;
+    requestBody[key] = value;
+  }
+
+  return requestBody;
 }

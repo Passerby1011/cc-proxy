@@ -206,6 +206,21 @@
             min-width: 0; /* Prevent grid blowout */
         }
 
+        @media (min-width: 1024px) {
+            .main-grid {
+                height: calc(100vh - 200px);
+                overflow: hidden;
+            }
+
+            .col-left,
+            .col-right {
+                max-height: 100%;
+                overflow-y: auto;
+                padding-right: 6px;
+                scrollbar-gutter: stable;
+            }
+        }
+
         @media (max-width: 1023px) {
             .col-left .grid-3 {
                 grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -668,6 +683,114 @@
             line-height: 1.5;
         }
 
+        .overview-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .overview-card {
+            padding: 16px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--card-border);
+            background: var(--bg-secondary);
+            box-shadow: var(--shadow-xs);
+        }
+
+        .overview-value {
+            font-family: var(--font-heading);
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1;
+        }
+
+        .overview-label {
+            margin-top: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-secondary);
+        }
+
+        .overview-detail {
+            margin-top: 6px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-tertiary);
+        }
+
+        .capability-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .capability-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--card-border);
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1;
+        }
+
+        .capability-badge.success {
+            background: var(--success-ultralight);
+            border-color: var(--success-light);
+            color: var(--success);
+        }
+
+        .capability-badge.warn {
+            background: var(--warning-ultralight);
+            border-color: var(--warning-light);
+            color: #b45309;
+        }
+
+        .capability-badge.info {
+            background: var(--accent-ultralight);
+            border-color: var(--accent-light);
+            color: var(--accent-primary);
+        }
+
+        .inline-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .inline-actions > input,
+        .inline-actions > select {
+            flex: 1;
+        }
+
+        .protocol-helper {
+            margin-top: 8px;
+            padding: 12px 14px;
+            border-radius: var(--radius-md);
+            border: 1px dashed var(--card-border);
+            background: var(--bg-secondary);
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        @media (max-width: 640px) {
+            .inline-actions {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .overview-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
         .section-title {
             font-size: 11px;
             font-weight: 800;
@@ -808,6 +931,94 @@
             maxFetchContentTokens: 100000
         };
 
+        const PROTOCOL_OPTIONS = [
+            {
+                value: 'openai',
+                label: 'OpenAI Chat Completions',
+                shortLabel: 'OpenAI Chat',
+                badge: '/v1/chat/completions',
+                defaultUrl: 'https://api.openai.com/v1/chat/completions',
+                description: '兼容 OpenAI Chat Completions 协议，适合传统 Chat Completion 上游。',
+                webToolLabel: '可模拟 OpenAI Web 工具'
+            },
+            {
+                value: 'openai-responses',
+                label: 'OpenAI Responses',
+                shortLabel: 'OpenAI Responses',
+                badge: '/v1/responses',
+                defaultUrl: 'https://api.openai.com/v1/responses',
+                description: '兼容 OpenAI Responses 协议，适合原生工具事件与 Responses 流式返回。',
+                webToolLabel: '可模拟 OpenAI Web 工具'
+            },
+            {
+                value: 'anthropic',
+                label: 'Anthropic Messages',
+                shortLabel: 'Anthropic',
+                badge: '/v1/messages',
+                defaultUrl: 'https://api.anthropic.com/v1/messages',
+                description: '兼容 Anthropic Messages 协议，适合 Claude 原生消息格式。',
+                webToolLabel: '可模拟 Anthropic Web 工具'
+            }
+        ];
+
+        const PROTOCOL_METADATA = Object.fromEntries(PROTOCOL_OPTIONS.map(item => [item.value, item]));
+
+        const getProtocolMeta = (protocol) => PROTOCOL_METADATA[protocol] || PROTOCOL_METADATA['openai'];
+        const getProtocolDefaultBaseUrl = (protocol) => getProtocolMeta(protocol).defaultUrl;
+        const isKnownProtocolBaseUrl = (value) => PROTOCOL_OPTIONS.some(item => item.defaultUrl === value);
+
+        const getNativeToolHelper = (channel) => {
+            const protocol = channel.protocol || 'openai';
+            if (protocol === 'openai-responses') {
+                return '推荐启用：Responses 协议可直接透传原生工具定义与更完整的工具流事件。';
+            }
+            if (protocol === 'openai') {
+                return '适用于支持 OpenAI tools / tool_calls 的上游；关闭时将回退为 XML/提示词注入模式。';
+            }
+            return '适用于原生支持 Anthropic tools 的上游；关闭时将回退为 XML/提示词注入模式。';
+        };
+
+        const getChannelCapabilityBadges = (channel, currentConfig) => {
+            const webTools = currentConfig.webTools || DEFAULT_WEB_TOOLS;
+            const protocolMeta = getProtocolMeta(channel.protocol || currentConfig.defaultProtocol || 'openai');
+            const webToolsEnabled = !!(webTools.enableSearchIntercept || webTools.enableFetchIntercept);
+            return [
+                { label: protocolMeta.badge, tone: 'info' },
+                {
+                    label: channel.supportsNativeToolCalling === true ? '原生工具调用' : 'XML/提示词注入',
+                    tone: channel.supportsNativeToolCalling === true ? 'success' : 'warn'
+                },
+                {
+                    label: channel.supportsSystemPrompt !== false ? '支持 System Prompt' : 'System 转用户消息',
+                    tone: channel.supportsSystemPrompt !== false ? 'success' : 'warn'
+                },
+                {
+                    label: webToolsEnabled ? protocolMeta.webToolLabel : 'Web 工具未启用',
+                    tone: webToolsEnabled ? 'success' : 'warn'
+                }
+            ];
+        };
+
+        const getConfigOverview = (currentConfig) => {
+            const channels = Array.isArray(currentConfig.channelConfigs) ? currentConfig.channelConfigs : [];
+            const protocols = Array.from(new Set(
+                (channels.length > 0
+                    ? channels.map(channel => channel.protocol || currentConfig.defaultProtocol || 'openai')
+                    : [currentConfig.defaultProtocol || 'openai'])
+            ));
+            const webTools = currentConfig.webTools || DEFAULT_WEB_TOOLS;
+            return {
+                channelCount: channels.length,
+                protocolCount: protocols.length,
+                protocols,
+                nativeToolChannels: channels.filter(channel => channel.supportsNativeToolCalling === true).length,
+                systemPromptChannels: channels.filter(channel => channel.supportsSystemPrompt !== false).length,
+                webSearchEnabled: !!webTools.enableSearchIntercept,
+                webFetchEnabled: !!webTools.enableFetchIntercept,
+                deepBrowseEnabled: !!webTools.deepBrowseEnabled,
+            };
+        };
+
         function App() {
             const [config, setConfig] = useState(null);
             const [loading, setLoading] = useState(false);
@@ -830,7 +1041,7 @@
                         return;
                     }
                     const data = await res.json();
-                    setConfig(data);
+                    setConfig({ ...data, channelConfigs: Array.isArray(data.channelConfigs) ? data.channelConfigs : [] });
                     setMessage('已连接');
                     setMsgType('success');
                 } catch (e) {
@@ -884,13 +1095,41 @@
             };
 
             const addChannel = () => {
+                const protocol = config.defaultProtocol || 'openai';
                 const newChannels = [...(config.channelConfigs || []), {
                     name: '',
-                    baseUrl: '',
+                    baseUrl: getProtocolDefaultBaseUrl(protocol),
                     apiKey: '',
-                    protocol: config.defaultProtocol || 'openai',
-                    supportsNativeToolCalling: false  // 默认不支持原生工具调用
+                    protocol,
+                    supportsNativeToolCalling: protocol === 'openai-responses',
+                    supportsSystemPrompt: true,
                 }];
+                setConfig({ ...config, channelConfigs: newChannels });
+            };
+
+            const applyDefaultProtocol = (protocol) => {
+                const shouldRefreshFallbackBaseUrl = (!config.upstreamBaseUrl || isKnownProtocolBaseUrl(config.upstreamBaseUrl))
+                    && (config.channelConfigs || []).length === 0;
+                setConfig({
+                    ...config,
+                    defaultProtocol: protocol,
+                    upstreamBaseUrl: shouldRefreshFallbackBaseUrl ? getProtocolDefaultBaseUrl(protocol) : config.upstreamBaseUrl,
+                });
+            };
+
+            const applyChannelProtocol = (index, protocol) => {
+                const newChannels = [...config.channelConfigs];
+                const currentChannel = newChannels[index] || {};
+                const shouldRefreshBaseUrl = !currentChannel.baseUrl || isKnownProtocolBaseUrl(currentChannel.baseUrl);
+                newChannels[index] = {
+                    ...currentChannel,
+                    protocol,
+                    baseUrl: shouldRefreshBaseUrl ? getProtocolDefaultBaseUrl(protocol) : currentChannel.baseUrl,
+                    supportsNativeToolCalling: protocol === 'openai-responses'
+                        ? true
+                        : (currentChannel.supportsNativeToolCalling ?? false),
+                    supportsSystemPrompt: currentChannel.supportsSystemPrompt !== false,
+                };
                 setConfig({ ...config, channelConfigs: newChannels });
             };
 
@@ -932,6 +1171,8 @@
                 `;
             }
 
+            const overview = getConfigOverview(config);
+
             return html`
                 <div class="container">
                     <div class="nav">
@@ -951,7 +1192,7 @@
                                     });
                                     const data = await res.json();
                                     if (data.status === 'success') {
-                                        setConfig(data.config);
+                                        setConfig({ ...data.config, channelConfigs: Array.isArray(data.config.channelConfigs) ? data.config.channelConfigs : [] });
                                         setMessage('配置已同步');
                                         setMsgType('success');
                                         setTimeout(() => setMessage('已连接'), 3000);
@@ -978,6 +1219,40 @@
                     <div class="main-grid">
                         <div class="col-left">
                             <div class="card">
+                                <h2><${Icons.Activity} /> 能力概览</h2>
+                                <div class="overview-grid">
+                                    <div class="overview-card">
+                                        <div class="overview-value">${overview.channelCount}</div>
+                                        <div class="overview-label">已配置上游节点</div>
+                                        <div class="overview-detail">多渠道模式已接入 ${overview.protocolCount} 种协议</div>
+                                    </div>
+                                    <div class="overview-card">
+                                        <div class="overview-value">${overview.nativeToolChannels}</div>
+                                        <div class="overview-label">原生工具渠道</div>
+                                        <div class="overview-detail">其余渠道自动回退 XML/提示词注入</div>
+                                    </div>
+                                    <div class="overview-card">
+                                        <div class="overview-value">${overview.webSearchEnabled || overview.webFetchEnabled ? 'ON' : 'OFF'}</div>
+                                        <div class="overview-label">Web 工具拦截</div>
+                                        <div class="overview-detail">搜索 ${overview.webSearchEnabled ? '已启用' : '关闭'} / 抓取 ${overview.webFetchEnabled ? '已启用' : '关闭'}</div>
+                                    </div>
+                                    <div class="overview-card">
+                                        <div class="overview-value">${overview.deepBrowseEnabled ? 'ON' : 'OFF'}</div>
+                                        <div class="overview-label">Deep Browse</div>
+                                        <div class="overview-detail">仅在 Smart Search 模式下生效</div>
+                                    </div>
+                                </div>
+                                <div class="section-title"><${Icons.Globe} /> 当前支持矩阵</div>
+                                <div class="capability-badges">
+                                    <span class="capability-badge info">下游 OpenAI Chat</span>
+                                    <span class="capability-badge info">下游 OpenAI Responses</span>
+                                    <span class="capability-badge info">下游 Anthropic Messages</span>
+                                    ${overview.protocols.map(protocol => html`<span class="capability-badge success">上游 ${getProtocolMeta(protocol).shortLabel}</span>`)}
+                                </div>
+                                <div class="helper-text">管理页已同步支持 OpenAI Responses、原生工具调用、以及 OpenAI / Anthropic Web 工具模拟能力的配置展示。</div>
+                            </div>
+
+                            <div class="card">
                                 <h2><${Icons.Settings} /> 系统核心配置</h2>
 
                                 <div class="section-title"><${Icons.Globe} /> 网络与协议</div>
@@ -993,10 +1268,10 @@
                                     </div>
                                     <div class="form-group">
                                         <label>默认上游协议</label>
-                                        <select value=${config.defaultProtocol} onChange=${e => updateField('defaultProtocol', e.target.value)}>
-                                            <option value="openai">OpenAI Standard</option>
-                                            <option value="anthropic">Anthropic Claude</option>
+                                        <select value=${config.defaultProtocol} onChange=${e => applyDefaultProtocol(e.target.value)}>
+                                            ${PROTOCOL_OPTIONS.map(option => html`<option value=${option.value}>${option.label}</option>`)}
                                         </select>
+                                        <div class="helper-text">${getProtocolMeta(config.defaultProtocol).description}</div>
                                     </div>
                                 </div>
 
@@ -1319,7 +1594,11 @@
                                         <div class="section-title" style="margin-top: 0;"><${Icons.Database} /> 向后兼容配置 (仅当无渠道时生效)</div>
                                         <div class="form-group">
                                             <label>默认上游 Base URL</label>
-                                            <input value=${config.upstreamBaseUrl} onInput=${e => updateField('upstreamBaseUrl', e.target.value)} />
+                                            <div class="inline-actions">
+                                                <input class="mono" placeholder=${getProtocolDefaultBaseUrl(config.defaultProtocol)} value=${config.upstreamBaseUrl} onInput=${e => updateField('upstreamBaseUrl', e.target.value)} />
+                                                <button onClick=${() => updateField('upstreamBaseUrl', getProtocolDefaultBaseUrl(config.defaultProtocol))}>填入预设</button>
+                                            </div>
+                                            <div class="helper-text">当前默认协议建议地址：<span class="mono">${getProtocolDefaultBaseUrl(config.defaultProtocol)}</span></div>
                                         </div>
                                         <div class="grid-2">
                                             <div class="form-group">
@@ -1344,19 +1623,31 @@
                                             <div class="grid-2">
                                                 <div class="form-group">
                                                     <label>渠道标识</label>
-                                                    <input placeholder="如: gpt-4o" value=${ch.name} onInput=${e => updateChannel(i, 'name', e.target.value)} />
+                                                    <input placeholder="如: openai-main / claude-prod" value=${ch.name} onInput=${e => updateChannel(i, 'name', e.target.value)} />
                                                 </div>
                                                 <div class="form-group">
                                                     <label>协议类型</label>
-                                                    <select value=${ch.protocol} onChange=${e => updateChannel(i, 'protocol', e.target.value)}>
-                                                        <option value="openai">OpenAI</option>
-                                                        <option value="anthropic">Anthropic</option>
+                                                    <select value=${ch.protocol} onChange=${e => applyChannelProtocol(i, e.target.value)}>
+                                                        ${PROTOCOL_OPTIONS.map(option => html`<option value=${option.value}>${option.label}</option>`)}
                                                     </select>
+                                                    <div class="helper-text">${getProtocolMeta(ch.protocol).description}</div>
+                                                </div>
+                                            </div>
+                                            <div class="form-group">
+                                                <label>协议能力</label>
+                                                <div class="protocol-helper">
+                                                    <div class="capability-badges" style="margin-top: 0;">
+                                                        ${getChannelCapabilityBadges(ch, config).map(item => html`<span class=${`capability-badge ${item.tone}`}>${item.label}</span>`)}
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div class="form-group">
                                                 <label>上游 Base URL</label>
-                                                <input placeholder="https://api.openai.com/v1/chat/completions" value=${ch.baseUrl} onInput=${e => updateChannel(i, 'baseUrl', e.target.value)} />
+                                                <div class="inline-actions">
+                                                    <input class="mono" placeholder=${getProtocolDefaultBaseUrl(ch.protocol)} value=${ch.baseUrl} onInput=${e => updateChannel(i, 'baseUrl', e.target.value)} />
+                                                    <button onClick=${() => updateChannel(i, 'baseUrl', getProtocolDefaultBaseUrl(ch.protocol))}>填入预设</button>
+                                                </div>
+                                                <div class="helper-text">协议预设地址：<span class="mono">${getProtocolDefaultBaseUrl(ch.protocol)}</span></div>
                                             </div>
                                             <div class="form-group">
                                                 <label>上游 API 密钥</label>
@@ -1385,7 +1676,7 @@
                                                            style="width: auto; margin: 0;" />
                                                     <span>支持原生工具调用</span>
                                                 </label>
-                                                <div class="helper-text">勾选后将直接传递工具定义给上游（适用于 OpenAI、Claude 等支持原生工具调用的 API），不进行 XML 转换</div>
+                                                <div class="helper-text">${getNativeToolHelper(ch)}</div>
                                             </div>
                                             <div class="form-group" style="margin-bottom: 0">
                                                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
@@ -1395,7 +1686,7 @@
                                                            style="width: auto; margin: 0;" />
                                                     <span>支持系统提示词（System Prompt）</span>
                                                 </label>
-                                                <div class="helper-text">取消勾选后，系统提示词将自动转换为用户消息（适用于不支持 system 角色的 API）</div>
+                                                <div class="helper-text">取消勾选后，系统提示词将自动转换为用户消息（适用于不支持 system 角色的 API）。注意：该选项仅影响 OpenAI / OpenAI Responses 上游，Anthropic 上游无效。</div>
                                             </div>
                                         </div>
                                     `)}

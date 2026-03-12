@@ -74,3 +74,27 @@ Deno.test("anthropicToOpenAI restores multimodal content, stop and passthrough p
   assertEquals(content[2].type, "image_url");
   assertEquals(content[2].image_url.url, "data:image/png;base64,BBBB");
 });
+
+Deno.test("openAIToAnthropic drops empty assistant text when tool_calls present", () => {
+  const converted = MessageFormatConverter.openAIToAnthropic({
+    model: "gpt-test",
+    max_completion_tokens: 128,
+    messages: [{
+      role: "assistant",
+      content: "",
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: {
+          name: "add_numbers",
+          arguments: "{\"a\":1,\"b\":2}",
+        },
+      }],
+    }],
+  } as any);
+
+  const contentBlocks = converted.messages[0].content as any[];
+  assertEquals(contentBlocks.length, 1);
+  assertEquals(contentBlocks[0].type, "tool_use");
+  assertEquals(contentBlocks[0].name, "add_numbers");
+});

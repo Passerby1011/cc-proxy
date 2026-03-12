@@ -13,6 +13,10 @@ function mapRole(role: string): "user" | "assistant" {
   return role === "assistant" ? "assistant" : "user";
 }
 
+function isBlankText(text: string): boolean {
+  return text.trim().length === 0;
+}
+
 function getOpenAIChatPassthrough(body: ClaudeRequest): Record<string, unknown> {
   const metadata = body.metadata;
   if (!metadata || typeof metadata !== "object") {
@@ -63,11 +67,15 @@ export function mapClaudeToOpenAI(
     const openaiContent: OpenAIContentBlock[] = [];
 
     if (typeof message.content === "string") {
-      openaiContent.push({ type: "text", text: message.content });
+      if (!isBlankText(message.content)) {
+        openaiContent.push({ type: "text", text: message.content });
+      }
     } else {
       for (const block of message.content) {
         if (block.type === "text") {
-          openaiContent.push({ type: "text", text: block.text });
+          if (!isBlankText(block.text)) {
+            openaiContent.push({ type: "text", text: block.text });
+          }
         } else if (block.type === "image") {
           openaiContent.push({
             type: "image_url",
@@ -82,6 +90,10 @@ export function mapClaudeToOpenAI(
           });
         }
       }
+    }
+
+    if (openaiContent.length === 0) {
+      continue;
     }
 
     if (message.role === "user" && body.thinking && body.thinking.type === "enabled") {

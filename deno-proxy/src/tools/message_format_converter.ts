@@ -131,8 +131,15 @@ function claudeImageToOpenAI(
   };
 }
 
+function isBlankText(text: string): boolean {
+  return text.trim().length === 0;
+}
+
 function extractOpenAIContentBlocks(content: string | OpenAIContentBlock[] | null): ClaudeContentBlock[] {
   if (typeof content === "string") {
+    if (isBlankText(content)) {
+      return [];
+    }
     return [{ type: "text", text: content }];
   }
 
@@ -143,7 +150,9 @@ function extractOpenAIContentBlocks(content: string | OpenAIContentBlock[] | nul
   const blocks: ClaudeContentBlock[] = [];
   for (const block of content) {
     if (block.type === "text") {
-      blocks.push({ type: "text", text: block.text });
+      if (!isBlankText(block.text)) {
+        blocks.push({ type: "text", text: block.text });
+      }
       continue;
     }
 
